@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+openai
+pinecone
+langchain
+pandas
+pyPDF2
+python-docx
+python-multipart 
+streamlit
