@@ -9,15 +9,8 @@ class AgentManager:
         self.ada_agent = ADAAgent()
 
     def handle_request(self, user_input):
-        """
-        1. OKA handles the lead, matching, broker flow
-        2. If the result indicates a lease or CRM follow-up, pass to ADA
-        """
-        oka_response = self.oka_agent.handle(user_input)
-
-        # 💡 Example: Look for keyword trigger — you can improve with your real flow!
-        if "handoff to ada" in oka_response.lower():
-            ada_response = self.ada_agent.handle(user_input)
-            return f"OKA: {oka_response}\n\nADA: {ada_response}"
-        else:
-            return oka_response
+        oka_result = self.oka_agent.handle(user_input)
+        if "handoff to ada" in oka_result.lower():
+            ada_result = self.ada_agent.handle(user_input)
+            return f"OKA: {oka_result}\nADA: {ada_result}"
+        return oka_result
