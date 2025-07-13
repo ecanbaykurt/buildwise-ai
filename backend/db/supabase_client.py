@@ -9,7 +9,7 @@ def create_user(email, name, phone):
     return supabase.table("users").insert({"email": email, "name": name, "phone": phone}).execute()
 
 def get_user(email):
-    return supabase.table("users").select("*").eq("email", email).single().execute()
+    return supabase.table("users").select("*").eq("email", email).maybe_single().execute()
 
 def create_conversation(user_id):
     return supabase.table("conversations").insert({"user_id": user_id}).execute()
