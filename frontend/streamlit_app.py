@@ -10,7 +10,7 @@ from backend.agents.agent_manager import AgentManager  # ✅ your orchestrator
 # -------------------------------
 # ✅ Initialize Orchestrator Agent
 # -------------------------------
-orchestrator = AgentManager()
+manager = AgentManager()   # ✅ Use `manager` consistently
 
 # -------------------------------
 # ✅ Streamlit Page Setup
@@ -36,8 +36,8 @@ if user_input:
     # Save user input to history
     st.session_state.chat_history.append(("user", user_input))
 
-    # Use the orchestrator to handle the flow
-    response = orchestrator.handle_request(user_input)
+    # ✅ Call the correct `manager` object, not `orchestrator`!
+    response = manager.handle_request(user_input)
 
     # Save agent response to history
     st.session_state.chat_history.append(("agent", response))
