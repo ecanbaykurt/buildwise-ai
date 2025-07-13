@@ -1,5 +1,3 @@
-# backend/orchestrator.py
-
 """
 Orchestrator:
 - Accepts raw user input from Streamlit or FastAPI.
@@ -9,6 +7,8 @@ Orchestrator:
 - Logs response embedding for memory or search.
 - Returns structured final answer to the front-end.
 """
+
+import uuid
 
 # ✅ Always use absolute imports for safe Cloud deployment
 from backend.agents.agent_manager import AgentManager
@@ -39,6 +39,7 @@ class Orchestrator:
 
         # ✅ Step 2: Save query embedding
         upsert_vector(
+            vector_id=str(uuid.uuid4()),   # unique ID for this input
             embedding=embedding,
             metadata={
                 "type": "user_input",
@@ -57,6 +58,7 @@ class Orchestrator:
 
         # ✅ Step 5: Save response embedding
         upsert_vector(
+            vector_id=str(uuid.uuid4()),   # unique ID for this response
             embedding=response_embedding,
             metadata={
                 "type": "agent_response",
