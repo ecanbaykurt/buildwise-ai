@@ -8,8 +8,9 @@ AgentManager:
 - Combines responses for a complete user answer.
 """
 
-from backend.agents.oka_agent import OKAAgent
-from backend.agents.ada_agent import ADAAgent
+from .oka_agent import OKAAgent
+from .ada_agent import ADAAgent
+
 
 class AgentManager:
     def __init__(self):
