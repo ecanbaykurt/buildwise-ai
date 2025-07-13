@@ -1,10 +1,12 @@
+streamlit
 fastapi
 uvicorn
 openai
 pinecone
+python-dotenv
+supabase
+sqlalchemy
+databases
+pydantic
 langchain
-pandas
-pyPDF2
-python-docx
-python-multipart 
-streamlit
+requests
