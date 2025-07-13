@@ -24,31 +24,44 @@ st.title("🏢 Buildwise AI — Multi-Agent Lease Assistant")
 
 # --- ✅ User Onboarding ---
 # ✅ Normalize user input
-email = st.text_input("Your Email").strip().lower()   # <-- FIXED: strip and lowercase!
+# --- User Onboarding ---
+email = st.text_input("Your Email").strip().lower()  # always normalize
 phone = st.text_input("Your Phone")
 
 if "user_id" not in st.session_state:
     if st.button("Start Chat"):
         if email:
-            # ✅ Debug: See what email you’re actually querying
-            st.write(f"Checking user with email: '{email}'")
+            st.info(f"Checking user with email: '{email}'")
 
+            # 🔑 Defensive: get user
             user_response = get_user(email)
             user = user_response.data
 
-            if not user:
-                create_user(email=email, name="New User", phone=phone)
-                user = get_user(email).data
+            st.write("🔍 get_user() returned:", user)
 
-            if user:
+            if not user or user == {}:
+                st.info("No user found — creating one.")
+                create_user(email=email, name="New User", phone=phone)
+
+                # Try again after create
+                user_response = get_user(email)
+                user = user_response.data
+
+                st.write("✅ New user created:", user)
+
+            if user and "id" in user:
                 st.session_state["user_id"] = user["id"]
+
                 convo_response = create_conversation(user["id"])
                 convo = convo_response.data[0]
+
                 st.session_state["conversation_id"] = convo["id"]
+                st.success(f"Welcome, {email} — you can now chat!")
+
             else:
-                st.error("Something went wrong creating your user.")
+                st.error("Could not create or find user. Please check Supabase.")
         else:
-            st.error("Please enter your email.")
+            st.warning("Please enter your email.")
 
 # --- ✅ Chat Interaction ---
 if "conversation_id" in st.session_state:
