@@ -1,15 +1,18 @@
+# backend/agents/ada/ada_agent.py
+
 from backend.agents.ada.lease_agent import LeaseAgent
+from backend.agents.ada.crm_agent import CRMAgent
 from backend.agents.ada.decision_agent import DecisionAgent
-from backend.agents.ada.crm_agent import CRM_Agent
 
 class ADAAgent:
     def __init__(self):
         self.lease_agent = LeaseAgent()
+        self.crm_agent = CRMAgent()
         self.decision_agent = DecisionAgent()
-        self.crm_agent = CRM_Agent()
 
-    def handle(self, user_message: str) -> str:
-        reply1 = self.lease_agent.explain_terms(user_message)
-        reply2 = self.decision_agent.support_negotiation(user_message)
-        reply3 = self.crm_agent.log_agreement(user_message)
-        return f"{reply1}\n\n{reply2}\n\n{reply3}"
+    def handle(self, user_input):
+        lease_info = self.lease_agent.run(user_input)
+        decision_info = self.decision_agent.run(lease_info)
+        crm_update = self.crm_agent.run(decision_info)
+
+        return f"Lease Details: {lease_info} | Decision: {decision_info} | CRM Update: {crm_update}"
