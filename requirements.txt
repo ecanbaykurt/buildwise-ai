@@ -2,7 +2,7 @@ streamlit
 fastapi
 uvicorn
 openai
-pinecone
+pinecone-client
 python-dotenv
 supabase
 sqlalchemy
