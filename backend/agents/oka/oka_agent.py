@@ -1,5 +1,3 @@
-# backend/agents/oka/oka_agent.py
-
 from backend.agents.oka.broker_agent import BrokerAgent
 from backend.agents.oka.matching_agent import MatchingAgent
 from backend.agents.oka.action_agent import ActionAgent
@@ -10,17 +8,8 @@ class OKAAgent:
         self.matching_agent = MatchingAgent()
         self.action_agent = ActionAgent()
 
-    def handle(self, user_message: str, user_id: str) -> str:
-        # Step 1: Broker agent captures needs
-        needs = self.broker_agent.collect_preferences(user_message, user_id)
-
-        # Step 2: Matching agent ranks best fits
-        matches = self.matching_agent.rank_properties(needs)
-
-        # Step 3: If high-quality match, handoff to associate
-        if self.action_agent.should_handoff(matches):
-            self.action_agent.send_to_crm(user_id, matches)
-            return "✅ I've found some great matches! A human agent will reach out shortly."
-
-        # Otherwise, continue the conversation
-        return f"Here are some options: {matches}"
+    def handle(self, user_message: str) -> str:
+        reply1 = self.broker_agent.handle(user_message)
+        reply2 = self.matching_agent.rank_properties(user_message)
+        reply3 = self.action_agent.create_followup(user_message)
+        return f"{reply1}\n\n{reply2}\n\n{reply3}"
