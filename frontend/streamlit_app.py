@@ -1,15 +1,11 @@
 import sys
 import os
 
-# ✅ Add project root to Python path so all nested modules work
+# ✅ Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import streamlit as st
-from backend.orchestrator import Orchestrator
 from datetime import datetime
-
-# ✅ Initialize orchestrator once
-orchestrator = Orchestrator()
 
 # --- ✅ Page config ---
 st.set_page_config(
@@ -91,18 +87,16 @@ search_query = st.text_input(
 
 st.markdown(f'<div class="agent-info">{context_text}</div>', unsafe_allow_html=True)
 
-# --- ✅ Handle main query ---
+# --- ✅ Safe placeholder for testing ---
 if search_query:
-    with st.spinner(f"⏳ {selected_agent} is processing your request..."):
-        agent_response = orchestrator.handle_chat_request(search_query)
-
-    st.success(f"✅ {selected_agent} response ready!")
+    st.success(f"✅ {selected_agent} is processing your request...")
+    dummy_response = f"This is a placeholder response for **{search_query}**."
     st.session_state.chat_history.append({"role": "user", "content": search_query})
-    st.session_state.chat_history.append({"role": "assistant", "content": agent_response})
+    st.session_state.chat_history.append({"role": "assistant", "content": dummy_response})
 
     st.markdown(f"""
     <div style="background: #f9f9f9; border-left: 4px solid #667eea; padding: 15px; border-radius: 10px; margin: 15px 0;">
-      {agent_response}
+      {dummy_response}
     </div>
     """, unsafe_allow_html=True)
 
@@ -120,12 +114,10 @@ if st.checkbox("Enable Chat Mode"):
         with st.chat_message("user"):
             st.write(prompt)
 
-        with st.spinner(f"⏳ {selected_agent} is preparing an answer..."):
-            response = orchestrator.handle_chat_request(prompt)
-
-        st.session_state.chat_history.append({"role": "assistant", "content": response})
+        dummy_response = f"This is a placeholder chat reply for **{prompt}**."
+        st.session_state.chat_history.append({"role": "assistant", "content": dummy_response})
         with st.chat_message("assistant"):
-            st.write(response)
+            st.write(dummy_response)
 
 # --- ✅ Sidebar Actions ---
 with st.sidebar:
