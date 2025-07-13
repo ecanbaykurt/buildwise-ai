@@ -1,14 +1,15 @@
-import pinecone  # ✅ not pinecone-client
-
 import os
+import pinecone
 
-# Init Pinecone
+# ✅ Read your keys
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")  # optional if you have env
+PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
 
-pinecone.init(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+# ✅ NEW: create Pinecone client object
+pc = pinecone.Pinecone(api_key=PINECONE_API_KEY)
 
-index = pinecone.Index("your-index-name")
+# ✅ You don’t need pinecone.init — you use `pc` now
+index = pc.Index("your-index-name")
 
 def upsert_vector(embedding, metadata):
     index.upsert(
