@@ -2,13 +2,15 @@
 
 """
 Orchestrator:
-- Accepts raw user input from your front-end or FastAPI.
-- Optionally logs input/query to Pinecone for RAG.
-- Uses OpenAI embeddings for semantic enrichment if needed.
-- Delegates all request handling to AgentManager.
-- Returns structured final response for the user.
+- Accepts raw user input from Streamlit or FastAPI.
+- Logs input embedding to Pinecone (optional RAG).
+- Uses OpenAI embeddings for semantic enrichment.
+- Delegates main processing to AgentManager (OKA + ADA flow).
+- Logs response embedding for memory or search.
+- Returns structured final answer to the front-end.
 """
 
+# ✅ Always use absolute imports for safe Cloud deployment
 from backend.agents.agent_manager import AgentManager
 from backend.utils.pinecone_client import upsert_vector, query_vector
 from openai import OpenAI
@@ -21,37 +23,46 @@ class Orchestrator:
     def handle_chat_request(self, user_input: str) -> str:
         """
         Orchestrator Flow:
-        1. Log user query embedding to Pinecone (optional).
-        2. Call AgentManager for multi-agent processing.
-        3. Log the response embedding (optional).
-        4. Return final combined output.
+        1. Create embedding for user input.
+        2. Store input in Pinecone (optional).
+        3. Run AgentManager (OKA → ADA if needed).
+        4. Create embedding for agent response.
+        5. Store response in Pinecone (optional).
+        6. Return final structured response.
         """
 
-        # Step 1: Embed query for logging or semantic search
+        # ✅ Step 1: Embed user query
         embedding = self.client.embeddings.create(
             model="text-embedding-3-large",
             input=user_input
         ).data[0].embedding
 
-        # Optional: Save embedding with metadata
+        # ✅ Step 2: Save query embedding
         upsert_vector(
             embedding=embedding,
-            metadata={"type": "user_input", "query": user_input}
+            metadata={
+                "type": "user_input",
+                "query": user_input
+            }
         )
 
-        # Step 2: Run AgentManager workflow
+        # ✅ Step 3: Run full AgentManager flow
         agent_response = self.agent_manager.handle_request(user_input)
 
-        # Step 3: (Optional) Log final answer back to Pinecone
+        # ✅ Step 4: Embed the agent response
         response_embedding = self.client.embeddings.create(
             model="text-embedding-3-large",
             input=agent_response
         ).data[0].embedding
 
+        # ✅ Step 5: Save response embedding
         upsert_vector(
             embedding=response_embedding,
-            metadata={"type": "agent_response", "answer": agent_response}
+            metadata={
+                "type": "agent_response",
+                "answer": agent_response
+            }
         )
 
-        # Step 4: Return final response for Streamlit
+        # ✅ Step 6: Return final output
         return agent_response
