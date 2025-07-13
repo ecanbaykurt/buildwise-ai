@@ -4,13 +4,13 @@
 AgentManager:
 - Orchestrates the flow between OKAAgent and ADAAgent.
 - Always runs OKAAgent first.
-- If OKAAgent output contains a handoff signal, runs ADAAgent next.
+- If handoff keyword detected, runs ADAAgent too.
 - Combines responses for a complete user answer.
 """
 
-from .oka_agent import OKAAgent
-from .ada_agent import ADAAgent
-
+# ✅ Use absolute imports (safe for Streamlit Cloud!)
+from backend.agents.oka_agent import OKAAgent
+from backend.agents.ada_agent import ADAAgent
 
 class AgentManager:
     def __init__(self):
@@ -19,27 +19,15 @@ class AgentManager:
 
     def handle_request(self, user_input: str) -> str:
         """
-        Full orchestration flow:
-        - Call OKAAgent to process input.
-        - If handoff keyword detected, call ADAAgent too.
-        - Return combined workflow steps.
+        Runs the OKA workflow first.
+        If handoff keyword is found, runs ADA workflow too.
         """
-        oka_output = self.oka_agent.handle(user_input)
+        oka_result = self.oka_agent.handle(user_input)
 
-        # Detect handoff signal
+        # Clear and flexible handoff keywords
         handoff_keywords = ["handoff to ada", "ready to finalize", "finalize lease"]
-        if any(keyword in oka_output.lower() for keyword in handoff_keywords):
-            ada_output = self.ada_agent.handle(user_input)
-            final_response = (
-                f"🤝 AgentManager Workflow:\n\n"
-                f"=== OKAAgent ===\n{oka_output}\n\n"
-                f"=== ADAAgent ===\n{ada_output}"
-            )
-        else:
-            final_response = (
-                f"🤝 AgentManager Workflow:\n\n"
-                f"=== OKAAgent ===\n{oka_output}\n\n"
-                f"(No ADA handoff triggered.)"
-            )
+        if any(keyword in oka_result.lower() for keyword in handoff_keywords):
+            ada_result = self.ada_agent.handle(user_input)
+            return f"🤝 AgentManager Workflow:\n\nOKA: {oka_result}\n\nADA: {ada_result}"
 
-        return final_response
+        return f"🤝 AgentManager Workflow:\n\nOKA: {oka_result}"
