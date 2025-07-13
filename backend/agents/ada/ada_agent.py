@@ -11,8 +11,8 @@ class ADAAgent:
         self.decision_agent = DecisionAgent()
 
     def handle(self, user_input):
-        lease_info = self.lease_agent.run(user_input)
-        decision_info = self.decision_agent.run(lease_info)
-        crm_update = self.crm_agent.run(decision_info)
+        lease_info = self.lease_agent.explain_terms(user_input)
+        decision_info = self.decision_agent.support_negotiation(lease_info)
+        crm_update = self.crm_agent.log_agreement(decision_info)
 
         return f"Lease Details: {lease_info} | Decision: {decision_info} | CRM Update: {crm_update}"
