@@ -1,43 +1,32 @@
-from backend.loaders.csv_excel_loader import load_building_data, load_unit_data
+# backend/agents/oka/matching_agent.py
+
 from backend.utils.pinecone_client import query_vector
+from openai import OpenAI
 
-import openai  # or your embedding model
-import os
-
-# Setup OpenAI embedding
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI()
 
 class MatchingAgent:
     def __init__(self):
-        self.buildings = load_building_data()
-        self.units = load_unit_data()
+        pass
 
-    def find_matches(self, preferences: dict) -> list:
-        """
-        Combines keyword filter + Pinecone RAG
-        """
-        # 1️⃣ Filter by budget or location
-        df = self.units
-
-        if "budget" in preferences:
-            df = df[df['price'] <= preferences['budget']]
-
-        if "location" in preferences:
-            df = df[df['location'].str.contains(preferences['location'], case=False)]
-
-        # 2️⃣ Embed client needs
-        description = f"Find best units for: {preferences}"
-        response = client.embeddings.create(
+    def rank_properties(self, preferences: str) -> str:
+        # 1️⃣ Embed the user query
+        embedding = client.embeddings.create(
             model="text-embedding-3-large",
-            input=description
-        )
-        query_embedding = response.data[0].embedding
+            input=preferences
+        ).data[0].embedding
 
-        # 3️⃣ Query Pinecone index
-        rag_response = query_vector(query_embedding)
+        # 2️⃣ Query Pinecone
+        rag_result = query_vector(embedding, top_k=3)
 
-        # 4️⃣ Combine both if needed
-        top_matches = rag_response.matches
+        # 3️⃣ Format RAG output for user
+        matches = []
+        for match in rag_result.matches:
+            metadata = match.metadata
+            score = match.score
+            matches.append(f"🏢 {metadata.get('address')} — Score: {round(score, 2)}")
 
-        return top_matches
+        if not matches:
+            return "Sorry, I couldn’t find any good matches."
+
+        return f"Here are the top matches I found:\n" + "\n".join(matches)
