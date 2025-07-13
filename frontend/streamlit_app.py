@@ -22,26 +22,35 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 st.set_page_config(page_title="Buildwise AI — Multi-Agent Lease Assistant")
 st.title("🏢 Buildwise AI — Multi-Agent Lease Assistant")
 
-# --- User Onboarding ---
-email = st.text_input("Your Email")
+# --- ✅ User Onboarding ---
+# ✅ Normalize user input
+email = st.text_input("Your Email").strip().lower()   # <-- FIXED: strip and lowercase!
 phone = st.text_input("Your Phone")
 
 if "user_id" not in st.session_state:
     if st.button("Start Chat"):
         if email:
+            # ✅ Debug: See what email you’re actually querying
+            st.write(f"Checking user with email: '{email}'")
+
             user_response = get_user(email)
             user = user_response.data
+
             if not user:
                 create_user(email=email, name="New User", phone=phone)
                 user = get_user(email).data
-            st.session_state["user_id"] = user["id"]
-            convo_response = create_conversation(user["id"])
-            convo = convo_response.data[0]
-            st.session_state["conversation_id"] = convo["id"]
+
+            if user:
+                st.session_state["user_id"] = user["id"]
+                convo_response = create_conversation(user["id"])
+                convo = convo_response.data[0]
+                st.session_state["conversation_id"] = convo["id"]
+            else:
+                st.error("Something went wrong creating your user.")
         else:
             st.error("Please enter your email.")
 
-# --- Chat Interaction ---
+# --- ✅ Chat Interaction ---
 if "conversation_id" in st.session_state:
     st.success(f"Welcome back, {email}!")
 
