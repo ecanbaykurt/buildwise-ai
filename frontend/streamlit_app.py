@@ -8,10 +8,10 @@ import streamlit as st
 from backend.orchestrator import Orchestrator
 from datetime import datetime
 
-# ✅ Initialize orchestrator
+# ✅ Initialize orchestrator once
 orchestrator = Orchestrator()
 
-# --- Page config ---
+# --- ✅ Page config ---
 st.set_page_config(
     page_title="OkadaAI - Commercial Real Estate Assistant",
     page_icon="🏢",
@@ -19,22 +19,23 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Custom CSS ---
+# --- ✅ Custom CSS ---
 st.markdown("""
 <style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header {visibility: hidden;}
+/* Add your custom styling rules here */
 </style>
 """, unsafe_allow_html=True)
 
-# --- Session State ---
+# --- ✅ Session State ---
 if "selected_agent" not in st.session_state:
     st.session_state.selected_agent = "OKA"
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# --- Header ---
+# --- ✅ Header ---
 st.markdown("""
 <div class="main-header">
   <div class="logo-section">
@@ -47,10 +48,13 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- Agent Selection ---
+# --- ✅ Agent Selection ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    agent_options = {"OKA": "Find & discover spaces", "ADA": "Lease support & guidance"}
+    agent_options = {
+        "OKA": "Find & discover spaces",
+        "ADA": "Lease support & guidance"
+    }
     selected_agent = st.selectbox(
         "Choose your AI assistant:",
         options=list(agent_options.keys()),
@@ -59,7 +63,7 @@ with col2:
     )
     st.session_state.selected_agent = selected_agent
 
-# --- Welcome ---
+# --- ✅ Welcome Section ---
 st.markdown("""
 <div class="welcome-section">
   <h2 class="welcome-title">Finding your next great space in NYC, effortlessly</h2>
@@ -67,7 +71,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- Query Section ---
+# --- ✅ Query Section ---
 st.markdown('<div class="search-section">', unsafe_allow_html=True)
 
 if selected_agent == "OKA":
@@ -77,7 +81,7 @@ if selected_agent == "OKA":
 else:
     st.markdown("### 📋 Hi! I'm ADA. How can I help with your lease?")
     search_placeholder = "I need help with..."
-    context_text = "I'm here to help you understand lease agreements and support you through the rental process."
+    context_text = "I'm here to help you understand lease agreements, explain terms, and support you through the rental process."
 
 search_query = st.text_input(
     "Search",
@@ -87,6 +91,7 @@ search_query = st.text_input(
 
 st.markdown(f'<div class="agent-info">{context_text}</div>', unsafe_allow_html=True)
 
+# --- ✅ Handle main query ---
 if search_query:
     with st.spinner(f"⏳ {selected_agent} is processing your request..."):
         agent_response = orchestrator.handle_chat_request(search_query)
@@ -103,23 +108,26 @@ if search_query:
 
 st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Chat Mode ---
+# --- ✅ Optional Chat Mode ---
 if st.checkbox("Enable Chat Mode"):
     st.markdown(f"### Chat with {selected_agent}")
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
+
     if prompt := st.chat_input(f"Ask {selected_agent} anything..."):
         st.session_state.chat_history.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.write(prompt)
+
         with st.spinner(f"⏳ {selected_agent} is preparing an answer..."):
             response = orchestrator.handle_chat_request(prompt)
+
         st.session_state.chat_history.append({"role": "assistant", "content": response})
         with st.chat_message("assistant"):
             st.write(response)
 
-# --- Sidebar ---
+# --- ✅ Sidebar Actions ---
 with st.sidebar:
     st.markdown("### Quick Actions")
     if st.button("💼 Office Space Search"):
@@ -136,11 +144,11 @@ with st.sidebar:
         st.rerun()
     st.markdown("---")
     if selected_agent == "OKA":
-        st.info("🔍 **OKA**: Property discovery and space matching.")
+        st.info("🔍 **OKA**: Property discovery, matching, and needs assessment.")
     else:
-        st.info("📋 **ADA**: Lease guidance and agreement support.")
+        st.info("📋 **ADA**: Lease guidance, contract clarifications, and tenant support.")
 
-# --- Footer ---
+# --- ✅ Footer ---
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #7f8c8d; padding: 20px;">
