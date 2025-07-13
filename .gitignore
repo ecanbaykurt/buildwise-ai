@@ -1,18 +1,6 @@
-# Python
+.env
 __pycache__/
 *.pyc
-
-# Virtual env
-venv/
-
-# Secrets
-.env
-
-# OS junk
-.DS_Store
-
-# Streamlit
-.streamlit/
-
-# Logs
-*.log
+*.pyo
+temp_files/
+buildwise_crm.db
