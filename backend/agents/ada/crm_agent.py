@@ -1,11 +1,16 @@
-# backend/agents/ada/crm_agent.py
+from backend.utils.pinecone_client import query_vector
+from openai import OpenAI
 
-class CRMUpdateAgent:
-    def __init__(self):
-        print("CRMUpdateAgent initialized ✅")
+client = OpenAI()
 
-    def update(self, user_id: str, lease_details: str, decision_tips: str):
-        print(f"Updating CRM for user {user_id}...")
-        print(f"Lease details: {lease_details}")
-        print(f"Decision tips: {decision_tips}")
-        # TODO: Add your DB or Supabase logic here
+class CRM_Agent:
+    def log_agreement(self, question: str) -> str:
+        embedding = client.embeddings.create(
+            model="text-embedding-3-large",
+            input=question
+        ).data[0].embedding
+
+        results = query_vector(embedding, top_k=1)
+        if results.matches:
+            return f"🗂️ CRM Agent: Updated CRM with — {results.matches[0].metadata.get('summary', '')}"
+        return "CRM Agent: No CRM update needed for that."
