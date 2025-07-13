@@ -1,11 +1,31 @@
 import sys
 import os
+import streamlit as st
+import pandas as pd
+from openai import OpenAI
 
 # ✅ Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import streamlit as st
-from datetime import datetime
+# ✅ Load your data safely
+@st.cache_data(show_spinner=False)
+def load_data():
+    building_df = pd.read_csv("building_data.csv")
+    unit_df = pd.read_csv("unit_data.csv")
+    return building_df, unit_df
+
+building_df, unit_df = load_data()
+
+# ✅ Setup OpenAI client
+client = OpenAI()
+
+# ✅ System prompt for consistent role
+SYSTEM_PROMPT = (
+    "You are OkadaAI, an expert commercial real estate assistant. "
+    "You help users find and lease NYC commercial spaces. "
+    "Always reason step-by-step. Use the data if possible; "
+    "if the info is not in the dataset, respond politely."
+)
 
 # --- ✅ Page config ---
 st.set_page_config(
@@ -21,7 +41,6 @@ st.markdown("""
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header {visibility: hidden;}
-/* Add your custom styling rules here */
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,10 +93,12 @@ if selected_agent == "OKA":
     st.markdown("### 🔍 Hi! I'm OKA. What space are you looking for?")
     search_placeholder = "I want to find..."
     context_text = "I'll help you discover commercial spaces that match your needs, budget, and preferences."
+    df_used = building_df
 else:
     st.markdown("### 📋 Hi! I'm ADA. How can I help with your lease?")
     search_placeholder = "I need help with..."
     context_text = "I'm here to help you understand lease agreements, explain terms, and support you through the rental process."
+    df_used = unit_df
 
 search_query = st.text_input(
     "Search",
@@ -87,16 +108,39 @@ search_query = st.text_input(
 
 st.markdown(f'<div class="agent-info">{context_text}</div>', unsafe_allow_html=True)
 
-# --- ✅ Safe placeholder for testing ---
+# --- ✅ Process Query ---
+def ask_openai_with_data(user_query, df):
+    sample_data = df.head(3).to_string()
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": f"Here is some example data:\n{sample_data}\n\n"
+                       f"My question: {user_query}"
+        }
+    ]
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages
+    )
+    return response.choices[0].message.content
+
+# --- ✅ Safe response ---
 if search_query:
-    st.success(f"✅ {selected_agent} is processing your request...")
-    dummy_response = f"This is a placeholder response for **{search_query}**."
-    st.session_state.chat_history.append({"role": "user", "content": search_query})
-    st.session_state.chat_history.append({"role": "assistant", "content": dummy_response})
+    with st.spinner(f"⏳ {selected_agent} is processing your request..."):
+        try:
+            agent_response = ask_openai_with_data(search_query, df_used)
+            st.session_state.chat_history.append({"role": "user", "content": search_query})
+            st.session_state.chat_history.append({"role": "assistant", "content": agent_response})
+            st.success(f"✅ {selected_agent} response ready!")
+        except Exception as e:
+            agent_response = f"⚠️ Oops! Something went wrong: {e}"
+            st.session_state.chat_history.append({"role": "assistant", "content": agent_response})
+            st.error(agent_response)
 
     st.markdown(f"""
     <div style="background: #f9f9f9; border-left: 4px solid #667eea; padding: 15px; border-radius: 10px; margin: 15px 0;">
-      {dummy_response}
+      {agent_response}
     </div>
     """, unsafe_allow_html=True)
 
@@ -114,10 +158,15 @@ if st.checkbox("Enable Chat Mode"):
         with st.chat_message("user"):
             st.write(prompt)
 
-        dummy_response = f"This is a placeholder chat reply for **{prompt}**."
-        st.session_state.chat_history.append({"role": "assistant", "content": dummy_response})
+        with st.spinner(f"⏳ {selected_agent} is preparing an answer..."):
+            try:
+                response = ask_openai_with_data(prompt, df_used)
+            except Exception as e:
+                response = f"⚠️ Error: {e}"
+
+        st.session_state.chat_history.append({"role": "assistant", "content": response})
         with st.chat_message("assistant"):
-            st.write(dummy_response)
+            st.write(response)
 
 # --- ✅ Sidebar Actions ---
 with st.sidebar:
