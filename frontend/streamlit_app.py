@@ -7,24 +7,36 @@ from openai import OpenAI
 # ✅ Add project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# ✅ Load your data safely
+# ✅ Setup OpenAI client
+client = OpenAI()
+
+# ✅ Load your data with safe fallback
 @st.cache_data(show_spinner=False)
 def load_data():
-    building_df = pd.read_csv("building_data.csv")
-    unit_df = pd.read_csv("unit_data.csv")
+    building_path = "buildwise-ai/temp_files/building_data.csv"
+    unit_path = "buildwise-ai/temp_files/unit_data.csv"
+
+    if not os.path.exists(building_path):
+        st.warning(f"⚠️ File not found: {building_path}")
+        building_df = pd.DataFrame()
+    else:
+        building_df = pd.read_csv(building_path)
+
+    if not os.path.exists(unit_path):
+        st.warning(f"⚠️ File not found: {unit_path}")
+        unit_df = pd.DataFrame()
+    else:
+        unit_df = pd.read_csv(unit_path)
+
     return building_df, unit_df
 
 building_df, unit_df = load_data()
 
-# ✅ Setup OpenAI client
-client = OpenAI()
-
-# ✅ System prompt for consistent role
+# ✅ System message for OpenAI
 SYSTEM_PROMPT = (
-    "You are OkadaAI, an expert commercial real estate assistant. "
-    "You help users find and lease NYC commercial spaces. "
-    "Always reason step-by-step. Use the data if possible; "
-    "if the info is not in the dataset, respond politely."
+    "You are OkadaAI, an expert NYC commercial real estate assistant. "
+    "You help users find and lease the right space. Use the dataset context "
+    "and reason step-by-step. If the info is missing, say so politely."
 )
 
 # --- ✅ Page config ---
@@ -108,24 +120,31 @@ search_query = st.text_input(
 
 st.markdown(f'<div class="agent-info">{context_text}</div>', unsafe_allow_html=True)
 
-# --- ✅ Process Query ---
+# --- ✅ OpenAI Call ---
 def ask_openai_with_data(user_query, df):
-    sample_data = df.head(3).to_string()
+    # Take sample data (keep short!)
+    if not df.empty:
+        sample_data = df.head(3).to_string()
+    else:
+        sample_data = "(No data found.)"
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": f"Here is some example data:\n{sample_data}\n\n"
-                       f"My question: {user_query}"
+            "content": f"Sample data:\n{sample_data}\n\n"
+                       f"Question: {user_query}"
         }
     ]
+
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=messages
     )
+
     return response.choices[0].message.content
 
-# --- ✅ Safe response ---
+# --- ✅ Process Query ---
 if search_query:
     with st.spinner(f"⏳ {selected_agent} is processing your request..."):
         try:
@@ -134,7 +153,7 @@ if search_query:
             st.session_state.chat_history.append({"role": "assistant", "content": agent_response})
             st.success(f"✅ {selected_agent} response ready!")
         except Exception as e:
-            agent_response = f"⚠️ Oops! Something went wrong: {e}"
+            agent_response = f"⚠️ Error: {e}"
             st.session_state.chat_history.append({"role": "assistant", "content": agent_response})
             st.error(agent_response)
 
