@@ -2,49 +2,34 @@ import streamlit as st
 import sys
 import os
 
-# Make sure your backend package is discoverable
+# Make sure backend is importable
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from backend.agents.agent_manager import AgentManager  # ✅ your orchestrator
+from backend.agents.agent_manager import AgentManager  # ✅ import once
 
-# -------------------------------
-# ✅ Initialize Orchestrator Agent
-# -------------------------------
-manager = AgentManager()   # ✅ Use `manager` consistently
+# ✅ Use one name consistently
+manager = AgentManager()  # your orchestrator instance
 
-# -------------------------------
-# ✅ Streamlit Page Setup
-# -------------------------------
+# Page setup
 st.set_page_config(page_title="🏢 Buildwise AI — Multi-Agent Chatbot")
 st.title("🏢 Buildwise AI — Multi-Agent Lease Assistant")
 
-# -------------------------------
-# ✅ Session State to store chat
-# -------------------------------
+# Session state
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# -------------------------------
-# ✅ Get User Input
-# -------------------------------
+# Get input
 user_input = st.chat_input("Ask me anything about your lease, a property, or your renewal...")
 
-# -------------------------------
-# ✅ Process Input with Orchestrator
-# -------------------------------
 if user_input:
-    # Save user input to history
     st.session_state.chat_history.append(("user", user_input))
 
-    # ✅ Call the correct `manager` object, not `orchestrator`!
+    # ✅ Correct object name: manager not orchestrator
     response = manager.handle_request(user_input)
 
-    # Save agent response to history
     st.session_state.chat_history.append(("agent", response))
 
-# -------------------------------
-# ✅ Render Chat History
-# -------------------------------
+# Render history
 for role, msg in st.session_state.chat_history:
     with st.chat_message(role):
         st.write(msg)
