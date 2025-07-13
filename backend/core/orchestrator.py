@@ -9,7 +9,7 @@ Orchestrator:
 - Returns structured final response for the user.
 """
 
-from backend.agents.agent_manager import AgentManager
+from .agents.agent_manager import AgentManager
 from backend.utils.pinecone_client import upsert_vector, query_vector
 from openai import OpenAI
 
