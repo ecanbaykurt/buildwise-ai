@@ -25,7 +25,7 @@ if user_input:
     st.session_state.chat_history.append(("user", user_input))
 
     # 🔗 Use Agent Manager to handle flow
-    response = manager.handle(user_input)
+    response = orchestrator.handle_request(user_input)
 
     st.session_state.chat_history.append(("agent", response))
 
