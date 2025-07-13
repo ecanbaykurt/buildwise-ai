@@ -1,17 +1,17 @@
-import streamlit as st
-from backend.orchestrator import Orchestrator
-from datetime import datetime
 import sys
 import os
 
-# Add the parent directory to Python path
+# ✅ Add the parent directory so Python can find 'backend'
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+import streamlit as st
+from backend.orchestrator import Orchestrator
+from datetime import datetime
 
-# Setup Orchestrator once
+# ✅ Setup Orchestrator once
 orchestrator = Orchestrator()
 
-# --- Page configuration ---
+# --- ✅ Page configuration ---
 st.set_page_config(
     page_title="OkadaAI - Commercial Real Estate Assistant",
     page_icon="🏢",
@@ -19,23 +19,23 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- Custom CSS styling ---
+# --- ✅ Custom CSS styling ---
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-    /* Your custom styles here... (keep your same CSS from your file) */
+    /* Add your existing custom styles here */
 </style>
 """, unsafe_allow_html=True)
 
-# --- Initialize session state ---
+# --- ✅ Initialize session state ---
 if 'selected_agent' not in st.session_state:
     st.session_state.selected_agent = 'OKA'
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 
-# --- Header ---
+# --- ✅ Header ---
 st.markdown("""
 <div class="main-header">
     <div class="logo-section">
@@ -48,7 +48,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- Agent selection ---
+# --- ✅ Agent selection ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     agent_options = {
@@ -63,7 +63,7 @@ with col2:
     )
     st.session_state.selected_agent = selected_agent
 
-# --- Welcome ---
+# --- ✅ Welcome section ---
 st.markdown("""
 <div class="welcome-section">
     <h2 class="welcome-title">Finding your next great space in NYC, effortlessly</h2>
@@ -71,7 +71,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# --- Search / Query Input ---
+# --- ✅ Search / Query Input ---
 st.markdown('<div class="search-section">', unsafe_allow_html=True)
 
 if selected_agent == 'OKA':
@@ -91,16 +91,18 @@ search_query = st.text_input(
 
 st.markdown(f'<div class="agent-info">{context_text}</div>', unsafe_allow_html=True)
 
+# ✅ If there’s a search query, run the Orchestrator flow
 if search_query:
     with st.spinner(f"⏳ {selected_agent} is thinking..."):
         agent_response = orchestrator.handle_chat_request(search_query)
+
     st.success(f"✅ {selected_agent} response ready!")
-    st.session_state.chat_history.append(
-        {"role": "user", "content": search_query}
-    )
-    st.session_state.chat_history.append(
-        {"role": "assistant", "content": agent_response}
-    )
+
+    # Update chat history
+    st.session_state.chat_history.append({"role": "user", "content": search_query})
+    st.session_state.chat_history.append({"role": "assistant", "content": agent_response})
+
+    # Display the answer nicely
     st.markdown(f"""
     <div style="background: #f9f9f9; border-left: 4px solid #667eea; padding: 15px; border-radius: 10px; margin: 15px 0;">
         {agent_response}
@@ -109,9 +111,11 @@ if search_query:
 
 st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Optional Chat Mode ---
+# --- ✅ Optional Chat Mode ---
 if st.checkbox("Enable Chat Mode"):
     st.markdown("### Chat with " + selected_agent)
+
+    # Display full history
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
             st.write(message["content"])
@@ -128,7 +132,7 @@ if st.checkbox("Enable Chat Mode"):
         with st.chat_message("assistant"):
             st.write(response)
 
-# --- Sidebar Quick Actions (optional) ---
+# --- ✅ Sidebar Quick Actions ---
 with st.sidebar:
     st.markdown("### Quick Actions")
     if st.button("💼 Office Space Search"):
@@ -151,7 +155,7 @@ with st.sidebar:
     else:
         st.info("📋 **ADA**: Lease agreements, contract explanations, and tenant support.")
 
-# --- Footer ---
+# --- ✅ Footer ---
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #7f8c8d; padding: 20px;">
