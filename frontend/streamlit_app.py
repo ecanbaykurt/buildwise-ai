@@ -1,6 +1,12 @@
 import streamlit as st
 from backend.orchestrator import Orchestrator
 from datetime import datetime
+import sys
+import os
+
+# Add the parent directory to Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 
 # Setup Orchestrator once
 orchestrator = Orchestrator()
