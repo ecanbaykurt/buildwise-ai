@@ -1,16 +1,8 @@
 # backend/agents/oka/broker_agent.py
 
 class BrokerAgent:
-    """
-    Engages the new prospect.
-    Gathers info: budget, pets, location, must-haves.
-    """
-    def __init__(self):
-        pass
-
-    def collect_preferences(self, user_message: str) -> dict:
-        # Placeholder logic
-        print(f"[BrokerAgent] Processing: {user_message}")
+    def collect_preferences(self, user_message: str, user_id: str) -> dict:
+        print(f"[BrokerAgent] Processing: {user_message} for user: {user_id}")
         return {
             "budget": "$3000/month",
             "pets": True,

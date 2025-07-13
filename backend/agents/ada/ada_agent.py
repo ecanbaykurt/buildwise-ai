@@ -12,10 +12,10 @@ class ADAAgent:
 
     def handle(self, user_message: str, user_id: str) -> str:
         # Example: run lease estimates
-        lease_details = self.lease_agent.get_lease_terms(user_message)
+        lease_details = self.lease_agent.explain_lease(user_message)
 
         # Example: get negotiation help
-        decision_tips = self.decision_agent.get_decision_support(lease_details)
+        decision_tips = self.decision_agent.suggest_adjustments(lease_details)
 
         # Example: update CRM with conversation summary
         self.crm_agent.update(user_id, lease_details, decision_tips)

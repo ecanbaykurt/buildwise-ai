@@ -12,10 +12,10 @@ class OKAAgent:
 
     def handle(self, user_message: str, user_id: str) -> str:
         # Step 1: Broker agent captures needs
-        needs = self.broker_agent.gather_needs(user_message, user_id)
+        needs = self.broker_agent.collect_preferences(user_message, user_id)
 
         # Step 2: Matching agent ranks best fits
-        matches = self.matching_agent.rank_listings(needs)
+        matches = self.matching_agent.rank_properties(needs)
 
         # Step 3: If high-quality match, handoff to associate
         if self.action_agent.should_handoff(matches):

@@ -72,7 +72,7 @@ class Orchestrator:
         combined_message = f"{rag_context}\n{user_message}"
 
         # Step 2: Route to the right agent flow
-        answer = self.manager.route_request(
+        answer = self.manager.route_message(
             user_message=combined_message,
             user_id=user_id,
             has_lease=has_lease

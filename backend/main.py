@@ -5,6 +5,7 @@ from backend.api import chat, upload
 from dotenv import load_dotenv
 import os
 import pinecone
+import pandas as pd
 
 
 

@@ -11,5 +11,5 @@ class ActionAgent:
     def should_handoff(self, matches: list) -> bool:
         return len(matches) > 0  # Simple: if we found good matches
 
-    def push_to_crm(self, user_id: str, preferences: dict, matches: list):
+    def send_to_crm(self, user_id: str, matches: list):
         print(f"[ActionAgent] Pushing lead for {user_id} with {matches} to CRM!")
