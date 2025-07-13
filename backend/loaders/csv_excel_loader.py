@@ -1,5 +1,12 @@
-import pandas as pd
+# backend/loaders/csv_excel_loader.py
 
-def load_csv_excel(path: str) -> str:
-    df = pd.read_csv(path) if path.endswith(".csv") else pd.read_excel(path)
-    return df.to_string(index=False)
+import pandas as pd
+import os
+
+BASE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../temp_files'))
+
+def load_building_data():
+    return pd.read_csv(os.path.join(BASE_PATH, "building_data.csv"))
+
+def load_unit_data():
+    return pd.read_csv(os.path.join(BASE_PATH, "unit_data.csv"))
