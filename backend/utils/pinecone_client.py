@@ -1,19 +1,16 @@
-import os
 import pinecone
+import streamlit as st  # for secrets in Streamlit Cloud
 
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
-PINECONE_INDEX = os.getenv("PINECONE_INDEX")
+# ✅ Load secrets
+PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
+PINECONE_INDEX = st.secrets["PINECONE_INDEX"]
 
-# ✅ New client syntax
+# ✅ New v3 client
 pc = pinecone.Pinecone(api_key=PINECONE_API_KEY)
 
-# ✅ List existing indexes
+# ✅ Check or create
 indexes = pc.list_indexes()
-
-# ✅ Check and create if not exists
 if PINECONE_INDEX not in indexes:
-    print(f"Creating index '{PINECONE_INDEX}'...")
     pc.create_index(
         name=PINECONE_INDEX,
         dimension=1536,
@@ -23,10 +20,7 @@ if PINECONE_INDEX not in indexes:
             region="us-east-1"
         )
     )
-else:
-    print(f"Index '{PINECONE_INDEX}' already exists.")
 
-# ✅ Use the index
 index = pc.Index(PINECONE_INDEX)
 
 def upsert_vector(embedding, metadata):
