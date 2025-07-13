@@ -11,9 +11,9 @@ class OKAAgent:
         self.action_agent = ActionAgent()
 
     def handle(self, user_input):
-        broker_response = self.broker_agent.run(user_input)
-        matching_response = self.matching_agent.run(broker_response)
-        action_response = self.action_agent.run(matching_response)
+        broker_response = self.broker_agent.handle(user_input) 
+        matching_response = self.matching_agent.find_matches(broker_response) 
+        action_response = self.action_agent.create_followup(matching_response)
 
         # Example: Suppose your action_agent decides it needs ADA
         if "finalize lease" in action_response.lower():
