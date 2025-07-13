@@ -1,15 +1,16 @@
-# backend/agents/oka/action_agent.py
+from backend.utils.pinecone_client import query_vector
+from openai import OpenAI
+
+client = OpenAI()
 
 class ActionAgent:
-    """
-    Checks if lead is qualified.
-    If yes, pushes chat summary to CRM or notifies a human associate.
-    """
-    def __init__(self):
-        pass
+    def create_followup(self, user_message: str) -> str:
+        embedding = client.embeddings.create(
+            model="text-embedding-3-large",
+            input=user_message
+        ).data[0].embedding
 
-    def should_handoff(self, matches: list) -> bool:
-        return len(matches) > 0  # Simple: if we found good matches
-
-    def send_to_crm(self, user_id: str, matches: list):
-        print(f"[ActionAgent] Pushing lead for {user_id} with {matches} to CRM!")
+        results = query_vector(embedding, top_k=1)
+        if results.matches:
+            return f"✅ Action Agent: Logging this lead for follow-up.\nSummary: {results.matches[0].metadata.get('summary', '')}"
+        return "Action Agent: Nothing to record yet."
