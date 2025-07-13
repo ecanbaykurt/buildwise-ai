@@ -1,3 +1,5 @@
+# backend/agents/oka/oka_agent.py
+
 from backend.agents.oka.broker_agent import BrokerAgent
 from backend.agents.oka.matching_agent import MatchingAgent
 from backend.agents.oka.action_agent import ActionAgent
@@ -8,8 +10,12 @@ class OKAAgent:
         self.matching_agent = MatchingAgent()
         self.action_agent = ActionAgent()
 
-    def handle(self, user_message: str) -> str:
-        reply1 = self.broker_agent.handle(user_message)
-        reply2 = self.matching_agent.rank_properties(user_message)
-        reply3 = self.action_agent.create_followup(user_message)
-        return f"{reply1}\n\n{reply2}\n\n{reply3}"
+    def handle(self, user_input):
+        broker_response = self.broker_agent.run(user_input)
+        matching_response = self.matching_agent.run(broker_response)
+        action_response = self.action_agent.run(matching_response)
+
+        # Example: Suppose your action_agent decides it needs ADA
+        if "finalize lease" in action_response.lower():
+            return f"{action_response} | Handoff to ADA"
+        return action_response
