@@ -1,0 +1,12 @@
+streamlit
+fastapi
+uvicorn
+openai
+pinecone
+python-dotenv
+supabase
+sqlalchemy
+databases
+pydantic
+langchain
+requests
