@@ -1,11 +1,21 @@
 # backend/agents/oka/broker_agent.py
 
+from backend.utils.pinecone_client import query_vector
+from openai import OpenAI
+
+client = OpenAI()
+
 class BrokerAgent:
-    def collect_preferences(self, user_message: str, user_id: str) -> dict:
-        print(f"[BrokerAgent] Processing: {user_message} for user: {user_id}")
-        return {
-            "budget": "$3000/month",
-            "pets": True,
-            "location": "Downtown",
-            "must_haves": ["balcony", "parking"]
-        }
+    def __init__(self):
+        pass
+
+    def ask_neighborhood_info(self, question: str) -> str:
+        embedding = client.embeddings.create(
+            model="text-embedding-3-large",
+            input=question
+        ).data[0].embedding
+
+        rag_result = query_vector(embedding, top_k=1)
+        if rag_result.matches:
+            return f"Here's what I found: {rag_result.matches[0].metadata.get('summary')}"
+        return "I couldn't find information on that. Could you clarify?"
