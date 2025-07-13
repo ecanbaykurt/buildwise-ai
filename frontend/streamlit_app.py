@@ -10,32 +10,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # ✅ Setup OpenAI client
 client = OpenAI()
 
-# ✅ Load your data with safe fallback
-@st.cache_data(show_spinner=False)
-def load_data():
-    building_path = "buildwise-ai/temp_files/building_data.csv"
-    unit_path = "buildwise-ai/temp_files/unit_data.csv"
-
-    if not os.path.exists(building_path):
-        st.warning(f"⚠️ File not found: {building_path}")
-        building_df = pd.DataFrame()
-    else:
-        building_df = pd.read_csv(building_path)
-
-    if not os.path.exists(unit_path):
-        st.warning(f"⚠️ File not found: {unit_path}")
-        unit_df = pd.DataFrame()
-    else:
-        unit_df = pd.read_csv(unit_path)
-
-    return building_df, unit_df
-
-building_df, unit_df = load_data()
-
-# ✅ System message for OpenAI
+# ✅ System prompt
 SYSTEM_PROMPT = (
     "You are OkadaAI, an expert NYC commercial real estate assistant. "
-    "You help users find and lease the right space. Use the dataset context "
+    "You help users find and lease the right space. Use the uploaded dataset context "
     "and reason step-by-step. If the info is missing, say so politely."
 )
 
@@ -61,6 +39,8 @@ if "selected_agent" not in st.session_state:
     st.session_state.selected_agent = "OKA"
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "uploaded_df" not in st.session_state:
+    st.session_state.uploaded_df = None
 
 # --- ✅ Header ---
 st.markdown("""
@@ -74,6 +54,18 @@ st.markdown("""
   </div>
 </div>
 """, unsafe_allow_html=True)
+
+# --- ✅ File uploader ---
+st.markdown("### 📂 Upload your dataset (CSV)")
+uploaded_file = st.file_uploader("Upload a CSV file with your building/unit data", type="csv")
+
+if uploaded_file is not None:
+    try:
+        st.session_state.uploaded_df = pd.read_csv(uploaded_file)
+        st.success(f"✅ Successfully loaded `{uploaded_file.name}`!")
+        st.write(st.session_state.uploaded_df.head())
+    except Exception as e:
+        st.error(f"⚠️ Error reading file: {e}")
 
 # --- ✅ Agent Selection ---
 col1, col2, col3 = st.columns([1, 2, 1])
@@ -94,7 +86,7 @@ with col2:
 st.markdown("""
 <div class="welcome-section">
   <h2 class="welcome-title">Finding your next great space in NYC, effortlessly</h2>
-  <p class="welcome-subtitle">Discover premium commercial properties tailored to your business needs</p>
+  <p class="welcome-subtitle">Upload your data and get instant answers</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -105,12 +97,10 @@ if selected_agent == "OKA":
     st.markdown("### 🔍 Hi! I'm OKA. What space are you looking for?")
     search_placeholder = "I want to find..."
     context_text = "I'll help you discover commercial spaces that match your needs, budget, and preferences."
-    df_used = building_df
 else:
     st.markdown("### 📋 Hi! I'm ADA. How can I help with your lease?")
     search_placeholder = "I need help with..."
     context_text = "I'm here to help you understand lease agreements, explain terms, and support you through the rental process."
-    df_used = unit_df
 
 search_query = st.text_input(
     "Search",
@@ -120,19 +110,20 @@ search_query = st.text_input(
 
 st.markdown(f'<div class="agent-info">{context_text}</div>', unsafe_allow_html=True)
 
-# --- ✅ OpenAI Call ---
-def ask_openai_with_data(user_query, df):
-    # Take sample data (keep short!)
-    if not df.empty:
+# --- ✅ OpenAI call with uploaded data ---
+def ask_openai_with_uploaded_data(user_query):
+    df = st.session_state.uploaded_df
+
+    if df is not None and not df.empty:
         sample_data = df.head(3).to_string()
     else:
-        sample_data = "(No data found.)"
+        sample_data = "(No data uploaded or empty.)"
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": f"Sample data:\n{sample_data}\n\n"
+            "content": f"Here’s a sample of the data:\n{sample_data}\n\n"
                        f"Question: {user_query}"
         }
     ]
@@ -141,27 +132,29 @@ def ask_openai_with_data(user_query, df):
         model="gpt-4o",
         messages=messages
     )
-
     return response.choices[0].message.content
 
 # --- ✅ Process Query ---
 if search_query:
-    with st.spinner(f"⏳ {selected_agent} is processing your request..."):
-        try:
-            agent_response = ask_openai_with_data(search_query, df_used)
-            st.session_state.chat_history.append({"role": "user", "content": search_query})
-            st.session_state.chat_history.append({"role": "assistant", "content": agent_response})
-            st.success(f"✅ {selected_agent} response ready!")
-        except Exception as e:
-            agent_response = f"⚠️ Error: {e}"
-            st.session_state.chat_history.append({"role": "assistant", "content": agent_response})
-            st.error(agent_response)
+    if st.session_state.uploaded_df is not None:
+        with st.spinner(f"⏳ {selected_agent} is processing your request..."):
+            try:
+                agent_response = ask_openai_with_uploaded_data(search_query)
+                st.session_state.chat_history.append({"role": "user", "content": search_query})
+                st.session_state.chat_history.append({"role": "assistant", "content": agent_response})
+                st.success(f"✅ {selected_agent} response ready!")
+            except Exception as e:
+                agent_response = f"⚠️ Error: {e}"
+                st.session_state.chat_history.append({"role": "assistant", "content": agent_response})
+                st.error(agent_response)
 
-    st.markdown(f"""
-    <div style="background: #f9f9f9; border-left: 4px solid #667eea; padding: 15px; border-radius: 10px; margin: 15px 0;">
-      {agent_response}
-    </div>
-    """, unsafe_allow_html=True)
+            st.markdown(f"""
+            <div style="background: #f9f9f9; border-left: 4px solid #667eea; padding: 15px; border-radius: 10px; margin: 15px 0;">
+              {agent_response}
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.warning("⚠️ Please upload a dataset before asking a question!")
 
 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -177,36 +170,18 @@ if st.checkbox("Enable Chat Mode"):
         with st.chat_message("user"):
             st.write(prompt)
 
-        with st.spinner(f"⏳ {selected_agent} is preparing an answer..."):
-            try:
-                response = ask_openai_with_data(prompt, df_used)
-            except Exception as e:
-                response = f"⚠️ Error: {e}"
+        if st.session_state.uploaded_df is not None:
+            with st.spinner(f"⏳ {selected_agent} is preparing an answer..."):
+                try:
+                    response = ask_openai_with_uploaded_data(prompt)
+                except Exception as e:
+                    response = f"⚠️ Error: {e}"
+        else:
+            response = "⚠️ Please upload a dataset first."
 
         st.session_state.chat_history.append({"role": "assistant", "content": response})
         with st.chat_message("assistant"):
             st.write(response)
-
-# --- ✅ Sidebar Actions ---
-with st.sidebar:
-    st.markdown("### Quick Actions")
-    if st.button("💼 Office Space Search"):
-        st.session_state.search_query = "Looking for office space"
-        st.rerun()
-    if st.button("🏪 Retail Location"):
-        st.session_state.search_query = "Need retail location"
-        st.rerun()
-    if st.button("💰 Budget Info"):
-        st.session_state.search_query = "Budget under $10k"
-        st.rerun()
-    if st.button("📅 Schedule Tour"):
-        st.session_state.search_query = "Schedule a tour"
-        st.rerun()
-    st.markdown("---")
-    if selected_agent == "OKA":
-        st.info("🔍 **OKA**: Property discovery, matching, and needs assessment.")
-    else:
-        st.info("📋 **ADA**: Lease guidance, contract clarifications, and tenant support.")
 
 # --- ✅ Footer ---
 st.markdown("---")
