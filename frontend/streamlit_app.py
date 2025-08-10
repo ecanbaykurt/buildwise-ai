@@ -1,16 +1,18 @@
 # frontend/streamlit_app.py
-import os, sys, json, math, datetime as dt
+import os, sys, json, datetime as dt
 from typing import List, Dict, Any, Optional, Tuple
+
 import pandas as pd
 import streamlit as st
 from pydantic import BaseModel, Field
 from openai import OpenAI
 
-# allow local imports later if you split files
+# Make local imports possible
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 client = OpenAI()
 
-# ---------- Page ----------
+# ---------------------- Page ----------------------
 st.set_page_config(
     page_title="BuildWise AI — VIA & DOMA (Manager)",
     page_icon="🏢",
@@ -18,22 +20,20 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ---------- Styles ----------
 st.markdown("""
 <style>
 #MainMenu, header, footer {visibility:hidden;}
-.block-container { padding-top: 1.0rem; padding-bottom: 1.0rem; }
+.block-container { padding-top: 1rem; padding-bottom: 1rem; }
 .card { border:1px solid #e5e7eb; background:#fff; border-radius:14px; padding:16px; margin-bottom:12px;}
 .badge {display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #e5e7ff; background:#eef2ff; font-size:12px; margin-right:6px;}
 hr.soft { border:none; border-top:1px solid #eee; margin:12px 0; }
-.suggestion-chip { display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #e0e7ff; background:#eef2ff; margin:4px 6px 0 0; cursor:pointer; font-size:13px; }
-.small {font-size:12px; opacity:.8}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Session ----------
+# ---------------------- Session ----------------------
 def ss_get(key, default):
-    if key not in st.session_state: st.session_state[key] = default
+    if key not in st.session_state:
+        st.session_state[key] = default
     return st.session_state[key]
 
 messages: List[Dict[str, str]] = ss_get("messages", [])
@@ -47,7 +47,7 @@ last_suggestions: Dict[str, Any] = ss_get("last_suggestions", {"key": "", "items
 pending_suggestion: str = ss_get("pending_suggestion", "")
 holds: List[Dict[str,Any]] = ss_get("holds", [])
 
-# ---------- Header ----------
+# ---------------------- Header ----------------------
 st.markdown("""
 <div style="display:flex;align-items:center;gap:12px;">
   <div style="width:40px;height:40px;border-radius:10px;background:#6c5ce7;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;">B</div>
@@ -58,7 +58,107 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------- Sidebar ----------
+# ===================== Utilities =====================
+
+def _to_num(x):
+    if pd.isna(x): return None
+    if isinstance(x, (int, float)): return float(x)
+    s = str(x).lower().replace("$","").replace(",","").replace("sqft","").replace("/sf/yr","").replace("/sf/year","").strip()
+    try: return float(s)
+    except: return None
+
+def _to_list(v):
+    if isinstance(v, list): return v
+    if pd.isna(v): return []
+    try: return json.loads(v)
+    except: return [a.strip() for a in str(v).replace(";", ",").split(",") if a.strip()]
+
+def _bool_from_text(x):
+    s = str(x).lower()
+    return any(k in s for k in ["yes","true","1","allow","pet","friendly"])
+
+# ---------------------- Repo loaders ----------------------
+def _normalize_buildings(df_b: pd.DataFrame) -> pd.DataFrame:
+    colmap = {
+        "building_id":"building_id","Building ID":"building_id","ID":"building_id",
+        "Property Address":"address","Address":"address","Building Address":"address",
+        "Neighborhood":"neighborhood","Area":"neighborhood","Borough":"neighborhood",
+        "Transit":"transit","Near Transit":"transit",
+        "Pets":"pets","Pet Friendly":"pets",
+    }
+    df = df_b.rename(columns={k:v for k,v in colmap.items() if k in df_b.columns}).copy()
+    if "building_id" not in df.columns: df["building_id"] = df.index.astype(str)
+    if "address" not in df.columns: df["address"] = ""
+    if "neighborhood" not in df.columns: df["neighborhood"] = ""
+    df["near_transit"] = df.get("transit", "").astype(str).str.len().gt(0)
+    df["pet_friendly"] = df.get("pets", "").apply(_bool_from_text)
+    return df[["building_id","address","neighborhood","near_transit","pet_friendly"]]
+
+def _normalize_units(df_u: pd.DataFrame) -> pd.DataFrame:
+    colmap = {
+        "Unit ID":"unit_id","unique_id":"unit_id","ID":"unit_id","id":"unit_id",
+        "building_id":"building_id","Building ID":"building_id",
+        "Monthly Rent":"rent","Rent":"rent","Price":"rent","Asking Rent":"rent","Annual Rent":"annual_rent",
+        "Square Feet":"sqft","SQFT":"sqft","Size (SF)":"sqft","Size":"sqft",
+        "Floor":"floor","Suite":"suite","Unit":"suite",
+        "Amenities":"amenities","Amenity":"amenities",
+        "Rent/SF/Year":"ppsf_year","$PSF/Yr":"ppsf_year","$/SF/Yr":"ppsf_year",
+        "Property Address":"address","Address":"address"
+    }
+    df = df_u.rename(columns={k:v for k,v in colmap.items() if k in df_u.columns}).copy()
+    if "unit_id" not in df.columns: df["unit_id"] = df.index.astype(str)
+    for c in ("rent","sqft","ppsf_year","annual_rent"):
+        if c in df.columns: df[c] = df[c].apply(_to_num)
+    if "amenities" in df.columns: df["amenities"] = df["amenities"].apply(_to_list)
+    else: df["amenities"] = [[] for _ in range(len(df))]
+    # derive rent if missing
+    if set(["rent","ppsf_year","sqft"]).issubset(df.columns):
+        need = df["rent"].isna() & df["ppsf_year"].notna() & df["sqft"].notna()
+        df.loc[need, "rent"] = (df["ppsf_year"] * df["sqft"] / 12.0).round(0)
+    if "annual_rent" in df.columns and "rent" in df.columns:
+        need = df["rent"].isna() & df["annual_rent"].notna()
+        df.loc[need, "rent"] = (df["annual_rent"] / 12.0).round(0)
+    return df
+
+def load_inventory_from_repo() -> pd.DataFrame:
+    b_path = os.path.join(os.path.dirname(__file__), "..", "temp_files", "building_data.csv")
+    u_path = os.path.join(os.path.dirname(__file__), "..", "temp_files", "unit_data.csv")
+    try:
+        bdf = pd.read_csv(b_path)
+        udf = pd.read_csv(u_path)
+    except Exception as e:
+        st.error(f"Could not read repo datasets: {e}")
+        return pd.DataFrame()
+
+    B = _normalize_buildings(bdf)
+    U = _normalize_units(udf)
+
+    # primary join on building_id; fallback to address
+    if "building_id" in U.columns and "building_id" in B.columns:
+        M = U.merge(B, on="building_id", how="left", suffixes=("","_b"))
+    elif "address" in U.columns and "address" in B.columns:
+        M = U.merge(B, on="address", how="left", suffixes=("","_b"))
+    else:
+        M = U.copy()
+        for c in ["neighborhood","near_transit","pet_friendly"]:
+            if c not in M.columns:
+                M[c] = "" if c=="neighborhood" else False
+
+    M["id"] = M["unit_id"].astype(str)
+
+    if "ppsf_year" not in M.columns:
+        M["ppsf_year"] = None
+    need_ppsf = M["ppsf_year"].isna() & M["rent"].notna() & M["sqft"].notna()
+    M.loc[need_ppsf, "ppsf_year"] = (M["rent"]*12.0/M["sqft"]).round(2)
+
+    keep = ["id","address","neighborhood","sqft","rent","ppsf_year","floor","suite",
+            "amenities","near_transit","pet_friendly"]
+    for k in keep:
+        if k not in M.columns:
+            M[k] = None if k not in ("amenities","near_transit","pet_friendly") else ([] if k=="amenities" else False)
+    return M[keep]
+
+# ---------------------- Sidebar ----------------------
 with st.sidebar:
     st.markdown("### 🧭 Workflow")
     mode = st.radio("Choose pipeline", options=["VIA", "DOMA"], index=0 if mode=="VIA" else 1)
@@ -70,93 +170,66 @@ with st.sidebar:
     st.session_state["lead_name"] = lead_name
     st.session_state["lead_email"] = lead_email
 
-    st.markdown("### 📂 Listings CSV")
-    up = st.file_uploader("Upload inventory (id, address, neighborhood, sqft, rent, amenities, transit, pets)", type="csv")
-    if up:
-        try:
-            raw_df = pd.read_csv(up)
-            def normalize_inventory_df(df: pd.DataFrame) -> pd.DataFrame:
-                colmap = {
-                    "Property Address":"address","Address":"address",
-                    "Neighborhood":"neighborhood","Area":"neighborhood","Borough":"neighborhood",
-                    "Monthly Rent":"rent","Rent":"rent","Price":"rent","Asking Rent":"rent",
-                    "Square Feet":"sqft","SQFT":"sqft","Size (SF)":"sqft","Size":"sqft",
-                    "unique_id":"id","ID":"id","Unit ID":"id",
-                    "Amenities":"amenities","Amenity":"amenities",
-                    "Transit":"transit","Near Transit":"transit",
-                    "Pets":"pets","Pet Friendly":"pets",
-                    "Floor":"floor","Suite":"suite","Unit":"suite",
-                    "Rent/SF/Year":"ppsf_year","$PSF/Yr":"ppsf_year","$/SF/Yr":"ppsf_year",
-                    "Annual Rent":"annual_rent"
-                }
-                df = df.rename(columns={k:v for k,v in colmap.items() if k in df.columns})
+    st.markdown("### 📂 Data source")
+    data_src = st.radio("Choose data source", ["Use repo datasets", "Upload CSV(s)"], index=0)
 
-                def _num(x):
-                    if pd.isna(x): return None
-                    if isinstance(x,(int,float)): return float(x)
-                    s = str(x).lower().replace("$","").replace(",","").replace("sqft","").replace("/sf/yr","").replace("/sf/year","").strip()
-                    try: return float(s)
-                    except: return None
-
-                # numbers
-                for c in ("rent","sqft","ppsf_year"):
-                    if c in df.columns: df[c] = df[c].apply(_num)
-                if "annual_rent" in df.columns: df["annual_rent"] = df["annual_rent"].apply(_num)
-
-                # fill derived: if only ppsf_year + sqft -> rent; if only annual_rent -> rent
-                if "rent" not in df.columns: df["rent"] = None
-                if "sqft" not in df.columns: df["sqft"] = None
-                if "ppsf_year" in df.columns:
-                    df.loc[df["rent"].isna() & df["ppsf_year"].notna() & df["sqft"].notna(),
-                           "rent"] = (df["ppsf_year"] * df["sqft"] / 12.0).round(0)
-                if "annual_rent" in df.columns:
-                    df.loc[df["rent"].isna() & df["annual_rent"].notna(), "rent"] = (df["annual_rent"]/12.0).round(0)
-
-                # amenities -> list
-                if "amenities" in df.columns:
-                    def _to_list(v):
-                        if isinstance(v, list): return v
-                        if pd.isna(v): return []
-                        try: return json.loads(v)
-                        except: return [a.strip() for a in str(v).replace(";",",").split(",") if a.strip()]
-                    df["amenities"] = df["amenities"].apply(_to_list)
-                else:
-                    df["amenities"] = [[] for _ in range(len(df))]
-
-                # transit + pets flags
-                def _to_bool(x): 
-                    s = str(x).lower()
-                    return any(k in s for k in ["yes","true","1","pet","allowed","friendly"])
-                df["pet_friendly"] = df.get("pets", pd.Series([""]*len(df))).apply(_to_bool)
-                df["near_transit"] = df.get("transit", pd.Series([""]*len(df))).astype(str).str.len().gt(0)
-
-                # ids/addresses
-                if "id" not in df.columns: df["id"] = df.index.astype(str)
-                if "address" not in df.columns: df["address"] = ""
-                if "neighborhood" not in df.columns: df["neighborhood"] = ""
-
-                return df
-
-            inventory_df = normalize_inventory_df(raw_df)
+    if data_src == "Use repo datasets":
+        inventory_df = load_inventory_from_repo()
+        if not inventory_df.empty:
             st.session_state["inventory_df"] = inventory_df
-            st.success(f"Loaded `{up.name}` ({len(inventory_df)} rows)")
+            st.success(f"Loaded repo datasets — {len(inventory_df)} units")
             st.dataframe(inventory_df.head(10), use_container_width=True)
-        except Exception as e:
-            st.error(f"Error reading CSV: {e}")
+        else:
+            st.warning("Repo datasets not found or empty. Switch to 'Upload CSV(s)'.")
+    else:
+        st.caption("Upload a combined inventory or a unit CSV (we’ll normalize automatically).")
+        up = st.file_uploader("Upload inventory CSV", type="csv")
+        if up:
+            try:
+                raw_df = pd.read_csv(up)
+                # try unit-shaped first
+                if any(c in raw_df.columns for c in ["Unit ID","unique_id","Size (SF)","SQFT","Rent","Monthly Rent"]):
+                    inv = _normalize_units(raw_df)
+                    # try to enrich with repo building file
+                    b_repo = os.path.join(os.path.dirname(__file__), "..", "temp_files", "building_data.csv")
+                    if os.path.exists(b_repo):
+                        B = _normalize_buildings(pd.read_csv(b_repo))
+                        if "building_id" in inv.columns and "building_id" in B.columns:
+                            inv = inv.merge(B, on="building_id", how="left")
+                    # finalize
+                    if "address" not in inv.columns: inv["address"] = ""
+                    if "neighborhood" not in inv.columns: inv["neighborhood"] = ""
+                    if "near_transit" not in inv.columns: inv["near_transit"] = False
+                    if "pet_friendly" not in inv.columns: inv["pet_friendly"] = False
+                    inv["id"] = inv["unit_id"].astype(str)
+                    if "ppsf_year" not in inv.columns: inv["ppsf_year"] = None
+                    need_ppsf = inv["ppsf_year"].isna() & inv["rent"].notna() & inv["sqft"].notna()
+                    inv.loc[need_ppsf, "ppsf_year"] = (inv["rent"]*12.0/inv["sqft"]).round(2)
+                    keep = ["id","address","neighborhood","sqft","rent","ppsf_year","floor","suite","amenities","near_transit","pet_friendly"]
+                    for k in keep:
+                        if k not in inv.columns:
+                            inv[k] = None if k not in ("amenities","near_transit","pet_friendly") else ([] if k=="amenities" else False)
+                    inventory_df = inv[keep]
+                else:
+                    # treat as already combined
+                    inventory_df = raw_df
+                st.session_state["inventory_df"] = inventory_df
+                st.success(f"Loaded `{up.name}` ({len(inventory_df)} rows)")
+                st.dataframe(inventory_df.head(10), use_container_width=True)
+            except Exception as e:
+                st.error(f"Error reading CSV: {e}")
 
     st.markdown("### ✉️ Send summary")
     email_to = st.text_input("Recipient email", value=email_to, placeholder="agent@brokerage.com")
     st.session_state["email_to"] = email_to
 
-# ---------- Demo data ----------
+# ---------------------- Demo slots ----------------------
 DEFAULT_SLOTS = [
     {"start": "2025-08-12T15:30:00Z", "end": "2025-08-12T16:00:00Z"},
     {"start": "2025-08-13T14:00:00Z", "end": "2025-08-13T14:30:00Z"},
 ]
 
-# =========================================================
-# VIA agents
-# =========================================================
+# ===================== VIA Agents =====================
 class SearchSpec(BaseModel):
     location: List[str] = Field(default_factory=list)
     min_sqft: Optional[int] = None
@@ -172,12 +245,13 @@ class SearchSpec(BaseModel):
 
 VIA_SYSTEM = (
     "You are a real-estate intake specialist with a warm, concise voice. "
-    "Output ONLY valid JSON for 'SearchSpec'. If the request lacks budget and size, set spec_status:'underconstrained'. "
+    "Output ONLY valid JSON for 'SearchSpec'. If budget and size are unclear, set spec_status:'underconstrained'. "
     "Never invent numbers; include confidence per field."
 )
+
 TONE_SYSTEM = (
-    "You are BuildWise, a friendly real-estate assistant. "
-    "Write natural, upbeat replies (80–140 words) and end with ONE clear next step."
+    "You are BuildWise, a friendly, concise real-estate assistant. "
+    "Summarize in natural language (not JSON), keep 80–140 words, and end with ONE clear next step."
 )
 
 class NeedsAgent:
@@ -211,12 +285,12 @@ class NeedsAgent:
             else:
                 d["budget_monthly_usd"]=None
             for k in ("must_haves","nice_to_haves"):
-                v=d.get(k); 
+                v=d.get(k)
                 if isinstance(v,str): d[k]=[v]
                 elif not isinstance(v,list): d[k]=[]
             for k in ("min_sqft","max_sqft","term_months"):
                 if d.get(k) is not None:
-                    try: d[k]=int(float(d[k])); 
+                    try: d[k]=int(float(d[k]))
                     except: d[k]=None
             if not isinstance(d.get("confidence"), dict): d["confidence"]={}
             if d.get("spec_status") not in ("ok","underconstrained"): d["spec_status"]="ok"
@@ -240,27 +314,37 @@ class MatchResult(BaseModel):
     matches: List[MatchItem]
     spec_used: Dict[str, Any]
 
+def _fmt_money(x):
+    if x is None: return "—"
+    try: return f"${int(round(float(x))):,}"
+    except: return "—"
+
+def _ppsf_year_calc(row):
+    if isinstance(row.get("ppsf_year"), (int,float)): return round(float(row["ppsf_year"]),2)
+    rent=row.get("rent"); sqft=row.get("sqft")
+    try:
+        if rent and sqft: return round((float(rent)*12)/float(sqft),2)
+    except: pass
+    return None
+
 def _score_row(row: Dict[str,Any], spec: Dict[str,Any]) -> Tuple[float,List[str]]:
     s = 0.0; reasons=[]
-    # size fit
     sqft = row.get("sqft")
     if spec.get("min_sqft") and sqft and sqft >= spec["min_sqft"]:
         s += 18; reasons.append(f"{int(sqft)} SF fits")
     if spec.get("max_sqft") and sqft and sqft <= spec["max_sqft"]:
         s += 12
-    # price fit
     rent = row.get("rent")
     if spec.get("budget_monthly_usd") and rent is not None:
-        lo, hi = spec["budget_monthly_usd"].get("min"), spec["budget_monthly_usd"].get("max")
-        if hi is not None and rent <= hi: s += 22; reasons.append(f"Rent {_fmt_money(rent)} within budget")
-        elif hi is not None: reasons.append(f"Rent {_fmt_money(rent)} above budget")
-        if lo is not None and rent >= lo: s += 6
-    # location
+        hi = spec["budget_monthly_usd"].get("max")
+        if hi is not None and rent <= hi:
+            s += 22; reasons.append(f"Rent {_fmt_money(rent)} within budget")
+        elif hi is not None:
+            reasons.append(f"Rent {_fmt_money(rent)} above budget")
     if spec.get("location"):
         text = " ".join([str(row.get(k,"")) for k in ("neighborhood","address")])
         if any(loc.lower() in text.lower() for loc in spec["location"]):
             s += 16; reasons.append("Neighborhood match")
-    # must-haves (amenities)
     musts = {m.lower() for m in spec.get("must_haves", [])}
     am = row.get("amenities", [])
     am = {str(a).lower() for a in (am if isinstance(am, list) else [am])}
@@ -268,7 +352,6 @@ def _score_row(row: Dict[str,Any], spec: Dict[str,Any]) -> Tuple[float,List[str]
         have = musts.intersection(am)
         s += 10 * (len(have)/max(1,len(musts)))
         if have: reasons.append("Has: " + ", ".join(sorted(list(have))[:3]))
-    # transit / pets
     if row.get("near_transit"): s += 8; reasons.append("Close to transit")
     if row.get("pet_friendly") and ("pet" in " ".join(musts) or "dog" in " ".join(musts)): s += 8; reasons.append("Pet-friendly")
     return max(0.0, min(100.0, s)), reasons[:3]
@@ -284,7 +367,6 @@ class MatchRankAgent:
                 score=sc, reasons=reasons, row_preview=row
             ))
         cands.sort(key=lambda x: x.score, reverse=True)
-        # even if all scores low, return top N with reason codes (soft fail)
         return MatchResult(matches=cands[:topn], spec_used=spec)
 
 class ActionPlan(BaseModel):
@@ -319,9 +401,7 @@ class VIAAgent:
                 "matches":[m.model_dump() for m in mres.matches],
                 "action_plan":plan.model_dump()}
 
-# =========================================================
-# DOMA agents (same as before, shortened for brevity)
-# =========================================================
+# ===================== DOMA Agents =====================
 DOMA_SYSTEM = ("Answer only from lease text; cite page/section; if unknown, say so.")
 class LeaseAnswer(BaseModel): answer: str; citations: List[Dict[str,Any]]; risk_flags: List[str]=[]
 class LeaseQAAgent:
@@ -337,9 +417,9 @@ class TriageResult(BaseModel):
 class ServiceTriageAgent:
     def run(self, ticket_text: str) -> TriageResult:
         t=ticket_text.lower()
-        if any(k in t for k in ["gas","smoke","water main"]):
+        if any(k in t for k in ["gas leak","smoke","water main break"]):
             return TriageResult("emergency","P0","dispatch_call_center",1,"Emergency detected. Dispatching now.")
-        cat="plumbing" if "leak" in t else "hvac" if ("ac" in t or "air" in t) else "general"
+        cat="plumbing" if "leak" in t else "hvac" if ("ac" in t or "air" in t or "heater" in t) else "general"
         vendor={"plumbing":"preferred_plumber_inc","hvac":"preferred_hvac_llc"}.get(cat,"handyman_pool")
         return TriageResult(cat,"P2",vendor,8 if cat!="general" else 24,f"Ticket logged as {cat}. Assigned {vendor}.")
 
@@ -354,9 +434,7 @@ class RenewalDealAgent:
         a2=Offer(rent_usd=round(tgt*1.01,2), term_months=12, incentives=["new appliances"])
         return RenewalPackage(primary=p, alternatives=[a1,a2], justification="Anchored to market median.", needs_manager_approval=False)
 
-# =========================================================
-# Manager Agent
-# =========================================================
+# ===================== Manager Agent =====================
 class ManagerAgent:
     VIA_INTENTS={"needs":["need","looking","find","search","budget","sqft","move","location","house","apartment","office"],
                  "tour":["tour","visit","schedule","see","book"]}
@@ -386,27 +464,7 @@ class ManagerAgent:
 
 manager = ManagerAgent()
 
-# =========================================================
-# Friendly replies
-# =========================================================
-def _fmt_money(x):
-    if x is None: return "—"
-    try: return f"${int(round(float(x))):,}"
-    except: return "—"
-
-def _ppsf_year_calc(row):
-    if isinstance(row.get("ppsf_year"), (int,float)): return round(float(row["ppsf_year"]),2)
-    rent=row.get("rent"); sqft=row.get("sqft")
-    try:
-        if rent and sqft: return round((float(rent)*12)/float(sqft),2)
-    except: pass
-    return None
-
-TONE_SYSTEM = (
-    "You are BuildWise, a friendly, concise real-estate assistant. "
-    "Summarize options in natural language (not JSON), keep 80–140 words, end with ONE clear next step."
-)
-
+# ===================== Friendly replies & UI helpers =====================
 def friendly_via_reply(res: Dict[str,Any], user_text: str) -> str:
     try:
         msgs=[{"role":"system","content":TONE_SYSTEM},
@@ -427,7 +485,6 @@ def friendly_lease_reply(ans: Dict[str,Any]) -> str:
     a = ans.get("lease_answer",{}).get("answer","")
     return f"Here’s what your lease says:\n\n{a}\n\nWant me to draft a quick note to your building manager or check renewal timelines?"
 
-# ---------- VIA UI helpers ----------
 def _slot_labels(slots):
     lbls=[]
     for s in slots:
@@ -452,9 +509,6 @@ def _row_friendly(row: Dict[str,Any]):
         "amenities": row.get("amenities", [])
     }
 
-# =========================================================
-# Prompt Helper
-# =========================================================
 def generate_suggestions(history: List[Dict[str,str]], mode: str) -> List[str]:
     if not history:
         return ["Find places in Midtown under $4,500/mo","What docs do I need to book a tour?"] if mode=="VIA" \
@@ -463,8 +517,8 @@ def generate_suggestions(history: List[Dict[str,str]], mode: str) -> List[str]:
     if last_suggestions.get("key")==key: return last_suggestions["items"]
     try:
         snippet="\n".join([f"{m['role']}: {m['content']}" for m in history[-6:]])
-        sys_prompt=("Return JSON {'suggestions':[...]} of 3 short, friendly, concrete follow-ups (<= 12 words) for "
-                    f"{mode}.")
+        sys_prompt=("Return JSON {'suggestions':[...]} of 3 short, friendly, concrete follow-ups (<= 12 words) "
+                    f"for {mode}.")
         r=client.chat.completions.create(model="gpt-4o-mini",
             messages=[{"role":"system","content":sys_prompt},{"role":"user","content":snippet}],
             response_format={"type":"json_object"})
@@ -473,9 +527,6 @@ def generate_suggestions(history: List[Dict[str,str]], mode: str) -> List[str]:
         items=["Show top 3 near subway","Book a tour for Tue 3pm"] if mode=="VIA" else ["What’s the late fee policy?","Offer a 24-month option"]
     st.session_state["last_suggestions"]={"key":key,"items":items}; return items
 
-# =========================================================
-# Helpers
-# =========================================================
 def ensure_welcome():
     if not messages:
         hello = "Hi! I’m BuildWise. Tell me what you’re looking for and I’ll help. Choose **VIA** for new-place search, or **DOMA** for lease/maintenance/renewals."
@@ -488,8 +539,7 @@ def inventory_records() -> List[Dict[str, Any]]:
 
 def build_email_summary(conv: List[Dict[str,str]], structured: Dict[str,Any]) -> str:
     lines=["Subject: BuildWise AI — Conversation Summary","","Hello team","","Here is the latest BuildWise AI conversation summary.",""]
-    if lead_name or lead_email:
-        lines += [f"Lead: {lead_name or '—'} · {lead_email or '—'}",""]
+    if lead_name or lead_email: lines += [f"Lead: {lead_name or '—'} · {lead_email or '—'}",""]
     for m in conv[-12:]:
         who="User" if m["role"]=="user" else "Assistant"; lines.append(f"{who}: {m['content']}")
     lines.append("")
@@ -497,12 +547,10 @@ def build_email_summary(conv: List[Dict[str,str]], structured: Dict[str,Any]) ->
     if structured.get("DOMA"): lines.append("— DOMA Result —\n"+json.dumps(structured["DOMA"], indent=2))
     lines += ["","Best,","BuildWise AI"]; return "\n".join(lines)
 
-# =========================================================
-# Layout
-# =========================================================
+# ===================== Layout =====================
 col_chat, col_right = st.columns([0.58, 0.42])
 
-# ---------------- LEFT: Chat transcript ----------------
+# --------- LEFT: Chat transcript ----------
 with col_chat:
     c1, c2 = st.columns([1,1])
     with c1:
@@ -529,7 +577,7 @@ with col_chat:
             st.session_state["last_structured"] = {"VIA": res}
             msg = friendly_via_reply(res, user_text)
             if st.session_state.get("holds"):
-                h = st.session_state["holds"][-1]; 
+                h = st.session_state["holds"][-1]
                 msg += f"\n\nI put a temporary hold on **{h['address']}**. Shall I confirm the booking?"
             return f"_{res['route']}_\n\n" + msg
         else:
@@ -547,7 +595,7 @@ with col_chat:
         messages.append({"role":"assistant","content":run_manager_and_reply(last_user)})
         st.session_state["messages"]=messages; st.rerun()
 
-    # suggestions
+    # Suggestions
     suggest_items = generate_suggestions(messages, mode)
     if suggest_items:
         st.caption("Suggestions")
@@ -573,14 +621,14 @@ with col_chat:
         messages.append({"role":"assistant","content":reply})
         st.session_state["messages"]=messages
 
-# ---------------- RIGHT: Results / tools ----------------
+# --------- RIGHT: Results / tools ----------
 with col_right:
     if mode == "VIA":
         st.markdown("### 🔎 VIA — New Tenant")
         st.caption("Manager routes your request to Needs → Match → Tour")
 
         if inventory_df is None or inventory_df.empty:
-            st.info("Upload a listings CSV in the sidebar for best VIA results.")
+            st.info("Upload or load datasets in the sidebar for best VIA results.")
         elif last_structured.get("VIA"):
             res = last_structured["VIA"]
             matches = res.get("matches", [])[:3]
@@ -682,4 +730,4 @@ with col_right:
     else: st.caption("Tip: add a recipient in the sidebar.")
 
 st.markdown("<hr class='soft'/>", unsafe_allow_html=True)
-st.caption("🏢 BuildWise AI — Friendly tone • Weighted ranking • Visit holds • Quick refine • VIA/DOMA manager routing")
+st.caption("🏢 BuildWise AI — Repo dataset merge • Friendly tone • Weighted ranking • Visit holds • Quick refine • VIA/DOMA routing")
