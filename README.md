@@ -1,8 +1,3 @@
-Got it — so instead of a business pitch, you want this section to be **research-heavy and technically deep**, showing your multi-agent architecture, design decisions, and future exploration areas, without touching pricing or revenue models.
-
-Here’s the **research-focused README section** you can use for your open-source release.
-
----
 
 # BuildWise AI — Research and Technical Architecture
 
@@ -184,3 +179,4 @@ Future extensions:
 If you want, I can now **rewrite your main README.md** so that it starts with the normal project intro, then includes this research-heavy section as the “Technical Appendix”.
 
 Do you want me to merge it like that? That would make your repo look like a serious research release.
+
