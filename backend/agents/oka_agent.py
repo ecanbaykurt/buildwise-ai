@@ -79,8 +79,8 @@ class OKAAgent:
         action_output = self.action_agent.run(matching_output)
 
         return (
-            f"📌 OKA Agent Workflow:\n\n"
-            f"🔍 BrokerAgent: {broker_output}\n\n"
-            f"🏠 MatchingAgent: {matching_output}\n\n"
-            f"✅ ActionAgent: {action_output}"
+            f"OKA Agent Workflow:\n\n"
+            f"BrokerAgent: {broker_output}\n\n"
+            f"MatchingAgent: {matching_output}\n\n"
+            f"ActionAgent: {action_output}"
         )
