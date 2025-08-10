@@ -6,7 +6,7 @@ import streamlit as st
 from pydantic import BaseModel, Field
 from openai import OpenAI
 
-# local imports later if you split files
+# allow future local imports if you split files
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 client = OpenAI()
@@ -23,12 +23,13 @@ st.set_page_config(
 st.markdown("""
 <style>
 #MainMenu, header, footer {visibility:hidden;}
-.block-container { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+.block-container { padding-top: 1.2rem; padding-bottom: 1.2rem; }
 .chat-bubble { padding: 12px 14px; border-radius: 14px; margin: 6px 0; }
 .user-bubble { background: #eef2ff; border: 1px solid #e0e7ff; }
 .assistant-bubble { background: #f9fafb; border: 1px solid #e5e7eb; }
 .card { border:1px solid #e5e7eb; background:#fff; border-radius:14px; padding:14px; }
 hr.soft { border:none; border-top:1px solid #eee; margin:12px 0; }
+.suggestion-chip { display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #e0e7ff; background:#eef2ff; margin:4px 6px 0 0; cursor:pointer; font-size:13px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -42,6 +43,8 @@ mode: str = ss_get("mode", "VIA")                       # user chooses only VIA 
 inventory_df: Optional[pd.DataFrame] = ss_get("inventory_df", None)
 last_structured: Dict[str, Any] = ss_get("last_structured", {})
 email_to: str = ss_get("email_to", "")
+last_suggestions: Dict[str, Any] = ss_get("last_suggestions", {"key": "", "items": []})
+pending_suggestion: str = ss_get("pending_suggestion", "")
 
 # ---------- Header ----------
 st.markdown("""
@@ -283,12 +286,6 @@ class RenewalDealAgent:
 # Manager Agent — auto-routing inside VIA/DOMA
 # =========================================================
 class ManagerAgent:
-    """
-    Determines which sub-agent(s) to run based on user intent.
-    The user only chooses VIA or DOMA; Manager handles the rest.
-    """
-
-    # simple keyword intents; you can replace with an LLM classifier later
     VIA_INTENTS = {
         "needs": ["need", "looking", "find", "search", "budget", "sqft", "move", "location"],
         "tour":  ["tour", "visit", "schedule", "see", "book"],
@@ -302,7 +299,7 @@ class ManagerAgent:
     def via_route(self, text: str) -> str:
         t = text.lower()
         if any(k in t for k in self.VIA_INTENTS["tour"]):   return "tour"
-        return "needs"  # default path runs full VIA (needs→match→tour)
+        return "needs"
 
     def doma_route(self, text: str) -> str:
         t = text.lower()
@@ -313,7 +310,6 @@ class ManagerAgent:
     def handle_via(self, user_text: str, inventory: List[Dict[str,Any]], slots: List[Dict[str,str]], sample_rows: Optional[str]) -> Dict[str,Any]:
         route = self.via_route(user_text)
         via = VIAAgent(inventory_rows=inventory, slots=slots)
-        # For VIA, even if user asked directly for a tour, we still need matches to propose slots.
         return {"route":"VIA/"+route, **via.handle_full(user_text, sample_rows)}
 
     def handle_doma(self, user_text: str, pasted_lease: str) -> Dict[str,Any]:
@@ -335,11 +331,55 @@ class ManagerAgent:
 manager = ManagerAgent()
 
 # =========================================================
+# Prompt Helper — suggestions from chat history
+# =========================================================
+def generate_suggestions(history: List[Dict[str,str]], mode: str) -> List[str]:
+    """
+    Uses last 6 turns to propose 2–4 follow-up prompts.
+    Falls back to heuristics if the API call fails.
+    """
+    if not history:
+        return ["Find offices in Midtown under $4,500/mo", "What documents do I need to book a tour?"] if mode=="VIA" \
+               else ["When is my renewal notice due?", "Log a maintenance ticket for a bathroom leak"]
+
+    key = f"{mode}|{len(history)}|{history[-1]['content'][:80]}"
+    if last_suggestions.get("key") == key:
+        return last_suggestions.get("items", [])
+
+    try:
+        snippet = "\n".join([f"{m['role']}: {m['content']}" for m in history[-6:]])
+        sys_prompt = (
+            "You generate short follow-up prompts (max 12 words each), helpful and concrete, "
+            f"for the '{mode}' workflow in a real-estate assistant. Return JSON list of strings only."
+        )
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role":"system","content":sys_prompt},
+                      {"role":"user","content":f"Chat snippet:\n{snippet}\n\nPropose 3 helpful follow-ups."}],
+            response_format={"type":"json_object"}
+        )
+        data = json.loads(resp.choices[0].message.content)
+        items = data.get("suggestions") or data.get("items") or list(data.values())[0]
+        items = [s.strip() for s in items if isinstance(s, str)][:4]
+    except Exception:
+        if mode == "VIA":
+            items = ["Show top 3 options closer to subway",
+                     "Can we tour this Tuesday at 3pm?",
+                     "Relax max_sqft and re-run matches"]
+        else:
+            items = ["What is the late fee policy?",
+                     "Create a service ticket: AC not cooling",
+                     "Propose a 24-month renewal option"]
+
+    st.session_state["last_suggestions"] = {"key": key, "items": items}
+    return items
+
+# =========================================================
 # Helpers
 # =========================================================
 def ensure_welcome():
     if not messages:
-        messages.append({"role":"assistant","content":"Hi! I’m BuildWise AI.\n\nSelect **VIA** or **DOMA** in the sidebar. I’ll route your message to the right agent automatically.\n- VIA: tell me area, budget, size, must-haves.\n- DOMA: ask about your lease, describe a maintenance issue, or request a renewal offer."})
+        messages.append({"role":"assistant","content":"Hi! I’m BuildWise AI.\n\nSelect **VIA** or **DOMA** in the sidebar. I’ll auto-route your message to the right agent.\n- VIA: tell me area, budget, size, must-haves.\n- DOMA: ask about your lease, describe a maintenance issue, or request a renewal offer."})
 
 def inventory_records() -> List[Dict[str, Any]]:
     if inventory_df is None or inventory_df.empty: return []
@@ -363,12 +403,7 @@ def summarize_via(res: Dict[str, Any]) -> str:
     return f"**Top matches**\n" + "\n".join(lines) + ("\n\n" + plan if plan else "")
 
 def build_email_summary(conv: List[Dict[str,str]], structured: Dict[str,Any]) -> str:
-    lines = ["Subject: BuildWise AI — Conversation Summary",
-             "",
-             "Hello team,",
-             "",
-             "Here is the latest BuildWise AI conversation summary.",
-             ""]
+    lines = ["Subject: BuildWise AI — Conversation Summary","","Hello team","","Here is the latest BuildWise AI conversation summary.",""]
     for m in conv[-12:]:
         who = "User" if m["role"]=="user" else "Assistant"
         lines.append(f"{who}: {m['content']}")
@@ -389,42 +424,93 @@ def build_email_summary(conv: List[Dict[str,str]], structured: Dict[str,Any]) ->
 # =========================================================
 col_chat, col_right = st.columns([0.58, 0.42])
 
+# ---------------- LEFT: ChatGPT-like transcript ----------------
 with col_chat:
+    # header controls
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("🧹 Clear chat", use_container_width=True):
+            st.session_state["messages"] = []
+            st.session_state["last_structured"] = {}
+            st.session_state["last_suggestions"] = {"key":"", "items":[]}
+            messages = []
+            st.rerun()
+    with c2:
+        regenerate = st.button("🔁 Regenerate", use_container_width=True)
+
+    # render full history
     ensure_welcome()
     for msg in messages:
-        cls = "assistant-bubble" if msg["role"] == "assistant" else "user-bubble"
-        st.markdown(f"<div class='chat-bubble {cls}'>{msg['content']}</div>", unsafe_allow_html=True)
+        with st.chat_message(msg["role"], avatar=("🧑" if msg["role"]=="user" else "🤖")):
+            st.markdown(msg["content"])
 
-    user_input = st.chat_input("Type here… I’ll auto-route inside VIA/DOMA")
-    if user_input:
-        messages.append({"role":"user","content":user_input})
-        try:
-            if mode == "VIA":
-                inv = inventory_records()
-                sample = inventory_df.head(3).to_string() if (inventory_df is not None and not inventory_df.empty) else None
-                with st.spinner("Manager → VIA agents (needs → match → tour)…"):
-                    res = manager.handle_via(user_text=user_input, inventory=inv, slots=DEFAULT_SLOTS, sample_rows=sample)
-                last_structured = {"VIA": res}
-                assistant_text = f"_{res['route']}_\n\n" + summarize_via(res)
+    # helper to run ManagerAgent and produce assistant_text + structured
+    def run_manager_and_reply(user_text: str):
+        if st.session_state["mode"] == "VIA":
+            inv = inventory_records()
+            sample = inventory_df.head(3).to_string() if (inventory_df is not None and not inventory_df.empty) else None
+            with st.spinner("Manager → VIA (needs → match → tour)…"):
+                res = manager.handle_via(user_text=user_text, inventory=inv, slots=DEFAULT_SLOTS, sample_rows=sample)
+            st.session_state["last_structured"] = {"VIA": res}
+            reply = f"_{res['route']}_\n\n" + summarize_via(res)
+        else:
+            pasted = st.session_state.get("lease_paste", "")
+            with st.spinner("Manager → DOMA…"):
+                res = manager.handle_doma(user_text=user_text, pasted_lease=pasted)
+            st.session_state["last_structured"] = {"DOMA": res}
+            if "lease_answer" in res:
+                reply = f"_{res['route']}_\n\n**Lease answer**\n\n{res['lease_answer']['answer']}"
+            elif "triage" in res:
+                reply = f"_{res['route']}_\n\n**Service ticket**\n\n{res['triage']['confirm_message']}"
             else:
-                pasted = st.session_state.get("lease_paste","")
-                with st.spinner("Manager → DOMA agents…"):
-                    res = manager.handle_doma(user_text=user_input, pasted_lease=pasted)
-                last_structured = {"DOMA": res}
-                if "lease_answer" in res:
-                    assistant_text = f"_{res['route']}_\n\n**Lease answer**\n\n{res['lease_answer']['answer']}"
-                elif "triage" in res:
-                    assistant_text = f"_{res['route']}_\n\n**Service ticket**\n\n{res['triage']['confirm_message']}"
-                else:
-                    p = res["renewal"]["primary"]
-                    assistant_text = f"_{res['route']}_\n\n**Renewal offer**\n\n${p['rent_usd']:,.0f}/mo · {p['term_months']} mo · {', '.join(p['incentives'])}"
-            messages.append({"role":"assistant","content":assistant_text})
-            st.session_state["messages"] = messages
-            st.session_state["last_structured"] = last_structured
-        except Exception as e:
-            messages.append({"role":"assistant","content":f"⚠️ Error: {e}"})
-            st.session_state["messages"] = messages
+                p = res["renewal"]["primary"]
+                reply = f"_{res['route']}_\n\n**Renewal offer**\n\n${p['rent_usd']:,.0f}/mo · {p['term_months']} mo · {', '.join(p['incentives'])}"
+        return reply
 
+    # regenerate last answer
+    if regenerate and any(m["role"] == "user" for m in messages):
+        last_user = [m for m in messages if m["role"] == "user"][-1]["content"]
+        new_reply = run_manager_and_reply(last_user)
+        messages.append({"role": "assistant", "content": new_reply})
+        st.session_state["messages"] = messages
+        st.rerun()
+
+    # ------- Prompt Helper: suggestions as clickable chips -------
+    suggest_items = generate_suggestions(messages, mode)
+    if suggest_items:
+        st.caption("Suggestions")
+        chips_cols = st.columns(min(4, len(suggest_items)))
+        clicked = None
+        for i, s in enumerate(suggest_items):
+            with chips_cols[i % len(chips_cols)]:
+                if st.button(s, key=f"sugg_{i}", help="Use this suggestion", args=None):
+                    clicked = s
+        if clicked:
+            st.session_state["pending_suggestion"] = clicked
+            st.experimental_rerun()
+
+    # input
+    default_placeholder = "Type here… I’ll auto-route inside VIA/DOMA"
+    prefill = st.session_state.get("pending_suggestion", "")
+    user_input = st.chat_input(default_placeholder, key="chat_in", disabled=False, placeholder=default_placeholder)
+    if prefill and not user_input:
+        # auto-send the suggestion as if typed
+        user_input = prefill
+        st.session_state["pending_suggestion"] = ""
+
+    if user_input:
+        with st.chat_message("user", avatar="🧑"):
+            st.markdown(user_input)
+        messages.append({"role": "user", "content": user_input})
+
+        assistant_text = run_manager_and_reply(user_input)
+        with st.chat_message("assistant", avatar="🤖"):
+            st.markdown(assistant_text)
+
+        messages.append({"role": "assistant", "content": assistant_text})
+        st.session_state["messages"] = messages
+
+# ---------------- RIGHT: Results / tools ----------------
 with col_right:
     if mode == "VIA":
         st.markdown("### 🔎 VIA — New Tenant")
@@ -482,7 +568,9 @@ with col_right:
         mime="text/plain"
     )
     if email_to.strip():
-        st.caption(f"Ready to send to: **{email_to}** (use your mail client or wire SMTP in code)")
+        st.caption(f"Ready to send to: **{email_to}** (use your mail client or wire SMTP later)")
+    else:
+        st.caption("Tip: add a recipient in the sidebar to show who will receive the summary.")
 
 st.markdown("<hr class='soft'/>", unsafe_allow_html=True)
-st.caption("🏢 BuildWise AI — Manager Agent auto-routing inside VIA & DOMA • Upload data in the sidebar")
+st.caption("🏢 BuildWise AI — Manager Agent + Prompt Helper • Chat history aware • Upload data in the sidebar")
