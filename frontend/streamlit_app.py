@@ -87,13 +87,32 @@ def _normalize_buildings(df_b: pd.DataFrame) -> pd.DataFrame:
         "Pets":"pets","Pet Friendly":"pets",
     }
     df = df_b.rename(columns={k:v for k,v in colmap.items() if k in df_b.columns}).copy()
-    if "building_id" not in df.columns: df["building_id"] = df.index.astype(str)
-    if "address" not in df.columns: df["address"] = ""
-    if "neighborhood" not in df.columns: df["neighborhood"] = ""
-    df["near_transit"] = df.get("transit", "").astype(str).str.len().gt(0)
-    df["pet_friendly"] = df.get("pets", "").apply(_bool_from_text)
-    return df[["building_id","address","neighborhood","near_transit","pet_friendly"]]
 
+    # required columns
+    if "building_id" not in df.columns:
+        df["building_id"] = df.index.astype(str)
+    if "address" not in df.columns:
+        df["address"] = ""
+    if "neighborhood" not in df.columns:
+        df["neighborhood"] = ""
+
+    # near_transit: only compute if column exists; otherwise False
+    if "transit" in df.columns:
+        df["near_transit"] = df["transit"].astype(str).str.len().gt(0)
+    else:
+        df["near_transit"] = False
+
+    # pet_friendly: only compute if column exists; otherwise False
+    def _bool_from_text(x):
+        s = str(x).lower()
+        return any(k in s for k in ["yes", "true", "1", "allow", "pet", "friendly"])
+
+    if "pets" in df.columns:
+        df["pet_friendly"] = df["pets"].apply(_bool_from_text)
+    else:
+        df["pet_friendly"] = False
+
+    return df[["building_id", "address", "neighborhood", "near_transit", "pet_friendly"]]
 def _normalize_units(df_u: pd.DataFrame) -> pd.DataFrame:
     colmap = {
         "Unit ID":"unit_id","unique_id":"unit_id","ID":"unit_id","id":"unit_id",
