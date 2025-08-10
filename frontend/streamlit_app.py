@@ -64,7 +64,53 @@ with st.sidebar:
     up = st.file_uploader("Upload inventory (id, address, neighborhood, sqft, rent, amenities)", type="csv")
     if up:
         try:
-            inventory_df = pd.read_csv(up)
+            raw_df = pd.read_csv(up)
+            # NEW: normalize columns & values so matching works
+            inventory_df = None
+
+            def normalize_inventory_df(df: pd.DataFrame) -> pd.DataFrame:
+                colmap = {
+                    "Property Address":"address", "Address":"address",
+                    "Neighborhood":"neighborhood", "Area":"neighborhood", "Borough":"neighborhood",
+                    "Monthly Rent":"rent", "Rent":"rent", "Price":"rent", "Asking Rent":"rent",
+                    "Square Feet":"sqft", "SQFT":"sqft", "Size":"sqft",
+                    "unique_id":"id", "ID":"id", "Unit ID":"id",
+                    "Amenities":"amenities", "Amenity":"amenities",
+                }
+                df = df.rename(columns={k:v for k,v in colmap.items() if k in df.columns})
+                # parse numbers: "$3,200" -> 3200 , "1,150" -> 1150
+                def _to_num(x):
+                    if pd.isna(x): return None
+                    if isinstance(x,(int,float)): return float(x)
+                    s = str(x).strip().replace(",","").replace("$","").replace("sqft","").strip()
+                    try: return float(s)
+                    except: return None
+                for c in ("rent","sqft"):
+                    if c in df.columns:
+                        df[c] = df[c].apply(_to_num)
+                # amenities to list
+                if "amenities" in df.columns:
+                    def _to_list(v):
+                        if isinstance(v, list): return v
+                        if pd.isna(v): return []
+                        try: return json.loads(v)
+                        except:
+                            return [a.strip() for a in str(v).replace(";",",").split(",") if a.strip()]
+                    df["amenities"] = df["amenities"].apply(_to_list)
+                # best-effort address/id
+                if "id" not in df.columns:
+                    df["id"] = df.index.astype(str)
+                if "address" not in df.columns:
+                    # try to combine if there are fragments
+                    for cand in ["Property Address", "Full Address"]:
+                        if cand in df.columns:
+                            df["address"] = df[cand]
+                            break
+                    if "address" not in df.columns:
+                        df["address"] = ""
+                return df
+
+            inventory_df = normalize_inventory_df(raw_df)
             st.session_state["inventory_df"] = inventory_df
             st.success(f"Loaded `{up.name}` ({len(inventory_df)} rows)")
             st.dataframe(inventory_df.head(8), use_container_width=True)
@@ -98,13 +144,17 @@ class SearchSpec(BaseModel):
     spec_status: str = "ok"
 
 VIA_SYSTEM = (
-    "You are a real estate intake specialist. Extract a complete search spec as JSON. "
-    "Infer cautiously. Include a confidence 0..1 per field. "
-    "If budget is implausibly low for the given area, set spec_status:'underconstrained' and suggest adjustments."
+    "You are a real-estate intake specialist with a warm, concise voice. "
+    "Output ONLY valid JSON for a 'SearchSpec' (fields: location[], min_sqft, max_sqft, budget_monthly_usd{min,max}, "
+    "term_months, must_haves[], nice_to_haves[], timeline, use_case, confidence{field:0..1}, spec_status in ['ok','underconstrained']). "
+    "Infer cautiously; don't invent properties. If budget/size is unclear, return spec_status:'underconstrained'."
 )
 
-from openai import OpenAI
-client = OpenAI()
+TONE_SYSTEM = (
+    "You are BuildWise, a friendly real-estate assistant. "
+    "Write natural, upbeat replies (80–140 words), avoid jargon, bullet where helpful, "
+    "and end with ONE clear question. Keep a professional but warm tone."
+)
 
 class NeedsAgent:
     def run(self, user_text: str, sample_rows: Optional[str]) -> SearchSpec:
@@ -117,7 +167,48 @@ class NeedsAgent:
             messages=msgs,
             response_format={"type":"json_object"}
         )
-        return SearchSpec.model_validate_json(resp.choices[0].message.content)
+        raw = resp.choices[0].message.content
+
+        # SAFE parse + coerce (prevents ValidationError)
+        def _coerce_spec(d: dict) -> dict:
+            d = dict(d or {})
+            loc = d.get("location")
+            if isinstance(loc, str): d["location"] = [loc]
+            elif not isinstance(loc, list): d["location"] = []
+            b = d.get("budget_monthly_usd")
+            if isinstance(b, (int, float, str)):
+                try: d["budget_monthly_usd"] = {"min": None, "max": float(str(b).replace(",","").replace("$",""))}
+                except: d["budget_monthly_usd"] = None
+            elif isinstance(b, dict):
+                m = {}
+                for k in ("min","max"):
+                    v = b.get(k)
+                    if v is None: m[k] = None
+                    else:
+                        try: m[k] = float(str(v).replace(",","").replace("$",""))
+                        except: m[k] = None
+                d["budget_monthly_usd"] = m
+            else:
+                d["budget_monthly_usd"] = None
+            for k in ("must_haves","nice_to_haves"):
+                v = d.get(k)
+                if isinstance(v, str): d[k] = [v]
+                elif not isinstance(v, list): d[k] = []
+            for k in ("min_sqft","max_sqft","term_months"):
+                if d.get(k) is not None:
+                    try: d[k] = int(float(d[k]))
+                    except: d[k] = None
+            if not isinstance(d.get("confidence"), dict):
+                d["confidence"] = {}
+            if d.get("spec_status") not in ("ok","underconstrained"):
+                d["spec_status"] = "ok"
+            return d
+
+        try:
+            data = json.loads(raw)
+            return SearchSpec(**_coerce_spec(data))
+        except Exception:
+            return SearchSpec(spec_status="underconstrained")
 
 class MatchItem(BaseModel):
     id: str
@@ -136,12 +227,12 @@ class MatchRankAgent:
 
     def _must_ok(self, row, spec):
         musts = {m.lower() for m in spec.get("must_haves", [])}
-        amenities = row.get("amenities", [])
-        if isinstance(amenities, str):
-            try: amenities = json.loads(amenities)
-            except: amenities = [amenities]
-        amenities = {str(a).lower() for a in amenities}
-        return musts.issubset(amenities) if musts else True
+        am = row.get("amenities", [])
+        if isinstance(am, str):
+            try: am = json.loads(am)
+            except: am = [am]
+        am = {str(a).lower() for a in am}
+        return musts.issubset(am) if musts else True
 
     def _score(self, row, spec):
         s = 0.0
@@ -151,8 +242,9 @@ class MatchRankAgent:
             lo, hi = spec["budget_monthly_usd"].get("min"), spec["budget_monthly_usd"].get("max")
             if lo is not None and row["rent"] >= lo: s += 15
             if hi is not None and row["rent"] <= hi: s += 15
-        if spec.get("location") and row.get("neighborhood"):
-            if any(loc.lower() in str(row["neighborhood"]).lower() for loc in spec["location"]): s += 20
+        if spec.get("location"):
+            text = " ".join([str(row.get(k,"")) for k in ("neighborhood","address")])
+            if any(loc.lower() in text.lower() for loc in spec["location"]): s += 20
         return max(0.0, min(100.0, s))
 
     def run(self, spec: Dict[str, Any], topn=5) -> MatchResult:
@@ -162,8 +254,8 @@ class MatchRankAgent:
             sc = self._score(row, spec)
             reasons = []
             if row.get("neighborhood"): reasons.append(f"Neighborhood match: {row['neighborhood']}")
-            if row.get("sqft"): reasons.append(f"{row['sqft']} sqft fits")
-            if row.get("rent") is not None: reasons.append(f"Rent ${row['rent']} in range")
+            if row.get("sqft"): reasons.append(f"{int(row['sqft'])} sqft fits")
+            if row.get("rent") is not None: reasons.append(f"Rent ${int(row['rent'])} in range")
             cands.append(MatchItem(
                 id=str(row.get("id", row.get("address",""))),
                 score=sc,
@@ -285,7 +377,7 @@ class RenewalDealAgent:
 # =========================================================
 class ManagerAgent:
     VIA_INTENTS = {
-        "needs": ["need", "looking", "find", "search", "budget", "sqft", "move", "location"],
+        "needs": ["need", "looking", "find", "search", "budget", "sqft", "move", "location", "house", "apartment", "office"],
         "tour":  ["tour", "visit", "schedule", "see", "book"],
     }
     DOMA_INTENTS = {
@@ -329,22 +421,51 @@ class ManagerAgent:
 manager = ManagerAgent()
 
 # =========================================================
+# Friendly narrative helpers
+# =========================================================
+def friendly_via_reply(res: Dict[str,Any], user_text: str) -> str:
+    """LLM-generated natural response with a single follow-up question."""
+    try:
+        msgs = [
+            {"role":"system","content":TONE_SYSTEM},
+            {"role":"user","content":f"User query: {user_text}\n\nSearch spec:\n{json.dumps(res.get('search_spec',{}))}\n\nTop matches:\n{json.dumps(res.get('matches',[])[:3])}\n\nWrite a friendly reply summarizing what we found. If there are no matches, explain gently and suggest exactly 2 ways to adjust (e.g., increase budget, expand area). End with ONE clear question."}
+        ]
+        r = client.chat.completions.create(model="gpt-4o-mini", messages=msgs)
+        return r.choices[0].message.content
+    except Exception:
+        # Fallback rule-based copy
+        ms = res.get("matches", [])
+        if not ms:
+            return ("Thanks! I didn’t find a perfect fit yet. We can broaden the search "
+                    "by slightly raising the budget or opening nearby neighborhoods. "
+                    "Would you like me to expand the area or adjust the price range?")
+        lines = []
+        for m in ms[:3]:
+            rp = m.get("row_preview", {})
+            lines.append(f"- {rp.get('address','(address pending)')} ({rp.get('neighborhood','')}) — "
+                         f"{int(rp.get('sqft',0)) or '—'} sqft · ${int(rp.get('rent',0)) or '—'}/mo")
+        return "Here are a few that look promising:\n" + "\n".join(lines) + \
+               "\n\nShall I book a tour for the first one, the second, or see other times?"
+
+def friendly_lease_reply(ans: Dict[str,Any]) -> str:
+    a = ans.get("lease_answer",{}).get("answer","")
+    return f"Here’s what your lease says:\n\n{a}\n\nWant me to draft a quick email to your building manager or check renewal timelines?"
+
+# =========================================================
 # Prompt Helper — suggestions from chat history
 # =========================================================
 def generate_suggestions(history: List[Dict[str,str]], mode: str) -> List[str]:
     if not history:
-        return ["Find offices in Midtown under $4,500/mo", "What documents do I need to book a tour?"] if mode=="VIA" \
-               else ["When is my renewal notice due?", "Log a maintenance ticket for a bathroom leak"]
-
+        return ["Find places in Midtown under $4,500/mo", "What docs do I need to book a tour?"] if mode=="VIA" \
+               else ["When is my renewal notice due?", "Create a maintenance ticket for a bathroom leak"]
     key = f"{mode}|{len(history)}|{history[-1]['content'][:80]}"
     if last_suggestions.get("key") == key:
         return last_suggestions.get("items", [])
-
     try:
         snippet = "\n".join([f"{m['role']}: {m['content']}" for m in history[-6:]])
         sys_prompt = (
-            "You generate short follow-up prompts (max 12 words each), helpful and concrete, "
-            f"for the '{mode}' workflow in a real-estate assistant. Return JSON list under key 'suggestions'."
+            "You generate short follow-up prompts (<= 12 words), friendly and concrete, "
+            f"for the '{mode}' workflow. Return JSON {{\"suggestions\": [..]}}."
         )
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -353,13 +474,10 @@ def generate_suggestions(history: List[Dict[str,str]], mode: str) -> List[str]:
             response_format={"type":"json_object"}
         )
         data = json.loads(resp.choices[0].message.content)
-        items = data.get("suggestions") or []
-        items = [s.strip() for s in items if isinstance(s, str)][:4]
+        items = [s.strip() for s in data.get("suggestions", []) if isinstance(s, str)][:4]
     except Exception:
-        items = ["Show top 3 options near subway",
-                 "Book a tour for Tuesday 3pm"] if mode=="VIA" else \
-                ["What is the late fee policy?",
-                 "Create a service ticket: AC not cooling"]
+        items = ["Show top 3 near subway", "Book a tour for Tue 3pm"] if mode=="VIA" else \
+                ["What’s the late fee policy?", "Offer a 24-month renewal option"]
     st.session_state["last_suggestions"] = {"key": key, "items": items}
     return items
 
@@ -368,28 +486,11 @@ def generate_suggestions(history: List[Dict[str,str]], mode: str) -> List[str]:
 # =========================================================
 def ensure_welcome():
     if not messages:
-        messages.append({"role":"assistant","content":"Hi! I’m BuildWise AI.\n\nSelect **VIA** or **DOMA** in the sidebar. I’ll auto-route your message to the right agent.\n- VIA: tell me area, budget, size, must-haves.\n- DOMA: ask about your lease, describe a maintenance issue, or request a renewal offer."})
+        messages.append({"role":"assistant","content":"Hi! I’m BuildWise AI. Tell me what you’re looking for and I’ll help.\n\nChoose **VIA** for new-place search, or **DOMA** for lease/maintenance/renewals."})
 
 def inventory_records() -> List[Dict[str, Any]]:
     if inventory_df is None or inventory_df.empty: return []
-    df = inventory_df.copy()
-    if "amenities" in df.columns:
-        def to_list(v):
-            if isinstance(v, list): return v
-            try: return json.loads(v)
-            except: return [str(v)] if pd.notna(v) else []
-        df["amenities"] = df["amenities"].apply(to_list)
-    return df.to_dict(orient="records")
-
-def summarize_via(res: Dict[str, Any]) -> str:
-    if not res or "matches" not in res: return "No results."
-    ms = res["matches"]
-    lines = []
-    for m in ms[:3]:
-        rp = m.get("row_preview", {})
-        lines.append(f"• {rp.get('address','')} ({rp.get('neighborhood','')}) — {rp.get('sqft','?')} sqft, ${rp.get('rent','?')}/mo — score {int(m.get('score',0))}")
-    plan = res.get("action_plan",{}).get("confirmation_prompt","")
-    return f"**Top matches**\n" + "\n".join(lines) + ("\n\n" + plan if plan else "")
+    return inventory_df.to_dict(orient="records")
 
 def build_email_summary(conv: List[Dict[str,str]], structured: Dict[str,Any]) -> str:
     lines = ["Subject: BuildWise AI — Conversation Summary","","Hello team","","Here is the latest BuildWise AI conversation summary.",""]
@@ -397,15 +498,9 @@ def build_email_summary(conv: List[Dict[str,str]], structured: Dict[str,Any]) ->
         who = "User" if m["role"]=="user" else "Assistant"
         lines.append(f"{who}: {m['content']}")
     lines.append("")
-    if structured.get("VIA"):
-        lines.append("— VIA Result —")
-        lines.append(json.dumps(structured["VIA"], indent=2))
-    if structured.get("DOMA"):
-        lines.append("— DOMA Result —")
-        lines.append(json.dumps(structured["DOMA"], indent=2))
-    lines.append("")
-    lines.append("Best,")
-    lines.append("BuildWise AI")
+    if structured.get("VIA"): lines.append("— VIA Result —\n"+json.dumps(structured["VIA"], indent=2))
+    if structured.get("DOMA"): lines.append("— DOMA Result —\n"+json.dumps(structured["DOMA"], indent=2))
+    lines.extend(["","Best,","BuildWise AI"])
     return "\n".join(lines)
 
 # =========================================================
@@ -427,7 +522,7 @@ with col_chat:
     with c2:
         regenerate = st.button("🔁 Regenerate", use_container_width=True)
 
-    # render history
+    # history
     ensure_welcome()
     for msg in messages:
         with st.chat_message(msg["role"], avatar=("🧑" if msg["role"]=="user" else "🤖")):
@@ -439,24 +534,24 @@ with col_chat:
         if st.session_state["mode"] == "VIA":
             inv = inventory_records()
             sample = inventory_df.head(3).to_string() if (inventory_df is not None and not inventory_df.empty) else None
-            with st.spinner("Manager → VIA (needs → match → tour)…"):
+            with st.spinner("Finding options for you…"):
                 res = manager.handle_via(user_text=user_text, inventory=inv, slots=DEFAULT_SLOTS, sample_rows=sample)
             st.session_state["last_structured"] = {"VIA": res}
-            return f"_{res['route']}_\n\n" + summarize_via(res)
+            return f"_{res['route']}_\n\n" + friendly_via_reply(res, user_text)
         else:
             pasted = st.session_state.get("lease_paste", "")
-            with st.spinner("Manager → DOMA…"):
+            with st.spinner("Checking your lease/policy…"):
                 res = manager.handle_doma(user_text=user_text, pasted_lease=pasted)
             st.session_state["last_structured"] = {"DOMA": res}
             if "lease_answer" in res:
-                return f"_{res['route']}_\n\n**Lease answer**\n\n{res['lease_answer']['answer']}"
+                return f"_{res['route']}_\n\n" + friendly_lease_reply(res)
             elif "triage" in res:
-                return f"_{res['route']}_\n\n**Service ticket**\n\n{res['triage']['confirm_message']}"
+                return f"_{res['route']}_\n\n**Service ticket**\n\n{res['triage']['confirm_message']}\n\nShould I notify your preferred vendor now?"
             else:
                 p = res["renewal"]["primary"]
-                return f"_{res['route']}_\n\n**Renewal offer**\n\n${p['rent_usd']:,.0f}/mo · {p['term_months']} mo · {', '.join(p['incentives'])}"
+                return f"_{res['route']}_\n\nI can offer **${p['rent_usd']:,.0f}/mo for {p['term_months']} months** ({', '.join(p['incentives'])}).\n\nWant this sent for approval, or explore the alternatives?"
 
-    # regenerate last answer
+    # regenerate
     if regenerate and any(m["role"] == "user" for m in messages):
         last_user = [m for m in messages if m["role"] == "user"][-1]["content"]
         messages.append({"role":"assistant","content":run_manager_and_reply(last_user)})
@@ -477,7 +572,7 @@ with col_chat:
             st.session_state["pending_suggestion"] = clicked
             st.rerun()
 
-    # chat input — ✅ CORRECT USAGE (no positional arg + placeholder together, no disabled kw)
+    # chat input
     placeholder = "Type here… I’ll auto-route inside VIA/DOMA"
     if st.session_state.get("pending_suggestion"):
         user_input = st.session_state["pending_suggestion"]
@@ -559,4 +654,4 @@ with col_right:
         st.caption("Tip: add a recipient in the sidebar to show who will receive the summary.")
 
 st.markdown("<hr class='soft'/>", unsafe_allow_html=True)
-st.caption("🏢 BuildWise AI — Manager Agent + Prompt Helper • Chat history aware • Upload data in the sidebar")
+st.caption("🏢 BuildWise AI — Friendly tone + data normalization • Chat history aware • VIA/DOMA manager routing")
