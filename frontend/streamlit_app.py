@@ -1,97 +1,89 @@
 # frontend/streamlit_app.py
-
-import sys
-import os
-import json
-import uuid
-import streamlit as st
-import pandas as pd
+import os, sys, json, uuid
 from typing import List, Dict, Any, Optional
+import pandas as pd
+import streamlit as st
 from pydantic import BaseModel, Field
 from openai import OpenAI
 
-# add project root for optional imports if you later split files
+# local imports later if you split files
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# openai client
 client = OpenAI()
 
-# page config
+# ---------- Page ----------
 st.set_page_config(
-    page_title="BuildWise AI",
+    page_title="BuildWise AI — VIA & DOMA (Manager)",
     page_icon="🏢",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
-# minimal css
+# ---------- Styles ----------
 st.markdown("""
 <style>
-#MainMenu {visibility: hidden;}
-header {visibility: hidden;}
-footer {visibility: hidden;}
+#MainMenu, header, footer {visibility:hidden;}
+.block-container { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+.chat-bubble { padding: 12px 14px; border-radius: 14px; margin: 6px 0; }
+.user-bubble { background: #eef2ff; border: 1px solid #e0e7ff; }
+.assistant-bubble { background: #f9fafb; border: 1px solid #e5e7eb; }
+.card { border:1px solid #e5e7eb; background:#fff; border-radius:14px; padding:14px; }
+hr.soft { border:none; border-top:1px solid #eee; margin:12px 0; }
 </style>
 """, unsafe_allow_html=True)
 
-# session state
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "uploaded_df" not in st.session_state:
-    st.session_state.uploaded_df = None
-if "mode" not in st.session_state:
-    st.session_state.mode = "VIA"
+# ---------- Session ----------
+def ss_get(key, default):
+    if key not in st.session_state: st.session_state[key] = default
+    return st.session_state[key]
 
-# header
+messages: List[Dict[str, str]] = ss_get("messages", [])
+mode: str = ss_get("mode", "VIA")                       # user chooses only VIA or DOMA
+inventory_df: Optional[pd.DataFrame] = ss_get("inventory_df", None)
+last_structured: Dict[str, Any] = ss_get("last_structured", {})
+email_to: str = ss_get("email_to", "")
+
+# ---------- Header ----------
 st.markdown("""
 <div style="display:flex;align-items:center;gap:12px;">
-  <div style="width:36px;height:36px;border-radius:8px;background:#6c5ce7;color:white;display:flex;align-items:center;justify-content:center;font-weight:700;">B</div>
+  <div style="width:40px;height:40px;border-radius:10px;background:#6c5ce7;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;">B</div>
   <div>
     <h2 style="margin:0;">BuildWise AI</h2>
-    <p style="margin:0;opacity:0.8;">Property management and real estate analytics assistant</p>
+    <p style="margin:0;opacity:.7;">VIA (new tenants) · DOMA (existing tenants) — auto-routed by Manager Agent</p>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-st.markdown("")
+# ---------- Sidebar ----------
+with st.sidebar:
+    st.markdown("### 🧭 Workflow")
+    mode = st.radio("Choose pipeline", options=["VIA", "DOMA"], index=0 if mode=="VIA" else 1, help="You pick VIA or DOMA; Manager routes to the right sub-agent.")
+    st.session_state["mode"] = mode
 
-# file uploader
-st.subheader("Upload your dataset CSV")
-uploaded_file = st.file_uploader("Upload CSV with listings such as id, address, neighborhood, sqft, rent, amenities", type="csv")
-if uploaded_file is not None:
-    try:
-        df = pd.read_csv(uploaded_file)
-        st.session_state.uploaded_df = df
-        st.success(f"Loaded {uploaded_file.name} with {len(df)} rows")
-        st.dataframe(df.head(10), use_container_width=True)
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
+    st.markdown("### 📂 Listings CSV")
+    up = st.file_uploader("Upload inventory (id, address, neighborhood, sqft, rent, amenities)", type="csv")
+    if up:
+        try:
+            inventory_df = pd.read_csv(up)
+            st.session_state["inventory_df"] = inventory_df
+            st.success(f"Loaded `{up.name}` ({len(inventory_df)} rows)")
+            st.dataframe(inventory_df.head(8), use_container_width=True)
+        except Exception as e:
+            st.error(f"Error reading CSV: {e}")
 
-# mode selection
-col_a, col_b = st.columns(2)
-with col_a:
-    st.session_state.mode = st.radio(
-        "Choose pipeline",
-        options=["VIA", "DOMA"],
-        format_func=lambda x: "VIA  new tenant" if x == "VIA" else "DOMA  existing tenant",
-        horizontal=True
-    )
+    st.markdown("### ✉️ Send summary")
+    email_to = st.text_input("Recipient email", value=email_to, placeholder="agent@brokerage.com")
+    st.session_state["email_to"] = email_to
 
-with col_b:
-    if st.session_state.mode == "VIA":
-        st.info("VIA will extract needs, rank matches, and propose tours")
-    else:
-        st.info("DOMA supports lease questions, service triage, and renewal offers")
-
-# simple calendar slots for demo
+# ---------- Demo data ----------
 DEFAULT_SLOTS = [
     {"start": "2025-08-12T15:30:00Z", "end": "2025-08-12T16:00:00Z"},
     {"start": "2025-08-13T14:00:00Z", "end": "2025-08-13T14:30:00Z"},
 ]
 
-# =========================
-# VIA agents inline
-# =========================
-
+# =========================================================
+# VIA agents
+# =========================================================
 class SearchSpec(BaseModel):
     location: List[str] = Field(default_factory=list)
     min_sqft: Optional[int] = None
@@ -107,25 +99,22 @@ class SearchSpec(BaseModel):
 
 VIA_SYSTEM = (
     "You are a real estate intake specialist. Extract a complete search spec as JSON. "
-    "Infer cautiously. Include a confidence 0 to 1 per field. "
-    "If budget is implausibly low for the given area, set spec_status to 'underconstrained' and suggest adjustments."
+    "Infer cautiously. Include a confidence 0..1 per field. "
+    "If budget is implausibly low for the given area, set spec_status:'underconstrained' and suggest adjustments."
 )
 
 class NeedsAgent:
-    def run(self, user_text: str, sample_rows: Optional[str] = None) -> SearchSpec:
-        messages = [{"role": "system", "content": VIA_SYSTEM}]
-        context = f"User says: {user_text}"
-        if sample_rows:
-            context += f"\nSample inventory rows:\n{sample_rows}"
-        messages.append({"role": "user", "content": context})
-
+    def run(self, user_text: str, sample_rows: Optional[str]) -> SearchSpec:
+        msgs = [{"role":"system","content":VIA_SYSTEM}]
+        ctx = f"User says: {user_text}"
+        if sample_rows: ctx += f"\nSample inventory rows:\n{sample_rows}"
+        msgs.append({"role":"user","content":ctx})
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=messages,
-            response_format={"type": "json_object"}
+            messages=msgs,
+            response_format={"type":"json_object"}
         )
-        data = resp.choices[0].message.content
-        return SearchSpec.model_validate_json(data)
+        return SearchSpec.model_validate_json(resp.choices[0].message.content)
 
 class MatchItem(BaseModel):
     id: str
@@ -140,111 +129,93 @@ class MatchResult(BaseModel):
     spec_used: Dict[str, Any]
 
 class MatchRankAgent:
-    def __init__(self, inventory_rows: List[Dict[str, Any]]):
-        self.inventory = inventory_rows
+    def __init__(self, rows: List[Dict[str, Any]]): self.rows = rows
 
-    def _hard_filter(self, row: Dict[str, Any], spec: Dict[str, Any]) -> bool:
+    def _must_ok(self, row, spec):
         musts = {m.lower() for m in spec.get("must_haves", [])}
-        amenities = {a.lower() for a in row.get("amenities", [])} if isinstance(row.get("amenities"), list) else set()
+        amenities = row.get("amenities", [])
+        if isinstance(amenities, str):
+            try: amenities = json.loads(amenities)
+            except: amenities = [amenities]
+        amenities = {str(a).lower() for a in amenities}
         return musts.issubset(amenities) if musts else True
 
-    def _score(self, row: Dict[str, Any], spec: Dict[str, Any]) -> float:
+    def _score(self, row, spec):
         s = 0.0
-        if spec.get("min_sqft") and row.get("sqft"):
-            if row["sqft"] >= spec["min_sqft"]:
-                s += 20
-        if spec.get("max_sqft") and row.get("sqft"):
-            if row["sqft"] <= spec["max_sqft"]:
-                s += 20
+        if spec.get("min_sqft") and row.get("sqft") and row["sqft"] >= spec["min_sqft"]: s += 20
+        if spec.get("max_sqft") and row.get("sqft") and row["sqft"] <= spec["max_sqft"]: s += 20
         if spec.get("budget_monthly_usd") and row.get("rent") is not None:
-            b = spec["budget_monthly_usd"]
-            lo, hi = b.get("min"), b.get("max")
-            if lo is not None and row["rent"] >= lo:
-                s += 15
-            if hi is not None and row["rent"] <= hi:
-                s += 15
+            lo, hi = spec["budget_monthly_usd"].get("min"), spec["budget_monthly_usd"].get("max")
+            if lo is not None and row["rent"] >= lo: s += 15
+            if hi is not None and row["rent"] <= hi: s += 15
         if spec.get("location") and row.get("neighborhood"):
-            if any(loc.lower() in str(row["neighborhood"]).lower() for loc in spec["location"]):
-                s += 20
-        return min(100.0, max(0.0, s))
+            if any(loc.lower() in str(row["neighborhood"]).lower() for loc in spec["location"]): s += 20
+        return max(0.0, min(100.0, s))
 
-    def run(self, spec: Dict[str, Any], topn: int = 5) -> MatchResult:
-        candidates: List[MatchItem] = []
-        for row in self.inventory:
-            if not self._hard_filter(row, spec):
-                continue
-            score = self._score(row, spec)
+    def run(self, spec: Dict[str, Any], topn=5) -> MatchResult:
+        cands: List[MatchItem] = []
+        for row in self.rows:
+            if not self._must_ok(row, spec): continue
+            sc = self._score(row, spec)
             reasons = []
-            if row.get("neighborhood"):
-                reasons.append(f"Neighborhood match {row['neighborhood']}")
-            if row.get("sqft"):
-                reasons.append(f"{row['sqft']} sqft fits range")
-            if row.get("rent") is not None:
-                reasons.append(f"Rent ${row['rent']} within budget")
-            candidates.append(MatchItem(
-                id=str(row.get("id", row.get("address", ""))),
-                score=score,
+            if row.get("neighborhood"): reasons.append(f"Neighborhood match: {row['neighborhood']}")
+            if row.get("sqft"): reasons.append(f"{row['sqft']} sqft fits")
+            if row.get("rent") is not None: reasons.append(f"Rent ${row['rent']} in range")
+            cands.append(MatchItem(
+                id=str(row.get("id", row.get("address",""))),
+                score=sc,
                 reasons=reasons[:3],
                 row_preview=row
             ))
-        candidates.sort(key=lambda x: x.score, reverse=True)
+        cands.sort(key=lambda x: x.score, reverse=True)
         relaxed = None
-        if len(candidates) < 3 and spec.get("max_sqft"):
+        if len(cands) < 3 and spec.get("max_sqft"):
             spec["max_sqft"] = int(spec["max_sqft"] * 1.1)
             relaxed = "max_sqft"
-        for c in candidates:
-            c.relaxed_field = relaxed
-        return MatchResult(matches=candidates[:topn], spec_used=spec)
+            for c in cands: c.relaxed_field = relaxed
+        return MatchResult(matches=cands[:topn], spec_used=spec)
 
 class ActionPlan(BaseModel):
     actions: List[Dict[str, Any]]
     confirmation_prompt: str
 
 class TourCloseAgent:
-    def __init__(self, calendar_slots: List[Dict[str, str]]):
-        self.slots = calendar_slots
-
+    def __init__(self, slots: List[Dict[str, str]]): self.slots = slots
     def run(self, matches: List[Dict[str, Any]]) -> ActionPlan:
-        proposals = []
+        props = []
         for m in matches[:2]:
-            slot = self.slots[0] if self.slots else {"start": "2025-08-12T15:30:00Z", "end": "2025-08-12T16:00:00Z"}
-            proposals.append({
-                "type": "tour",
+            slot = self.slots[0] if self.slots else {"start":"2025-08-12T15:30:00Z","end":"2025-08-12T16:00:00Z"}
+            props.append({
+                "type":"tour",
                 "unit_id": m.get("id"),
-                "address": m.get("row_preview", {}).get("address", ""),
-                "start": slot["start"],
-                "end": slot["end"],
-                "required_docs": ["photo_id", "income_proof"]
+                "address": m.get("row_preview",{}).get("address",""),
+                "start": slot["start"], "end": slot["end"],
+                "required_docs": ["photo_id","income_proof"]
             })
-        confirm = "Would you like me to book the first tour, the second tour, or propose other times"
-        return ActionPlan(actions=proposals, confirmation_prompt=confirm)
+        return ActionPlan(actions=props, confirmation_prompt="Book tour 1, tour 2, or propose other times?")
 
 class VIAAgent:
-    def __init__(self, inventory_rows: List[Dict[str, Any]], calendar_slots: List[Dict[str, str]]):
-        self.inventory = inventory_rows
-        self.calendar = calendar_slots
+    def __init__(self, inventory_rows: List[Dict[str, Any]], slots: List[Dict[str, str]]):
         self.needs = NeedsAgent()
-        self.closer = TourCloseAgent(calendar_slots)
+        self.matcher = MatchRankAgent(rows=inventory_rows)
+        self.closer = TourCloseAgent(slots)
+        self.inventory_rows = inventory_rows
+        self.slots = slots
 
-    def handle(self, user_text: str, sample_rows: Optional[str] = None) -> Dict[str, Any]:
-        spec = self.needs.run(user_text=user_text, sample_rows=sample_rows)
-        matcher = MatchRankAgent(inventory_rows=self.inventory)
-        mres = matcher.run(spec=spec.model_dump())
+    def handle_full(self, user_text: str, sample_rows: Optional[str]) -> Dict[str, Any]:
+        spec = self.needs.run(user_text, sample_rows)
+        mres = self.matcher.run(spec=spec.model_dump())
         plan = self.closer.run([m.model_dump() for m in mres.matches])
-        return {
-            "stage": "VIA",
-            "search_spec": spec.model_dump(),
-            "matches": [m.model_dump() for m in mres.matches],
-            "action_plan": plan.model_dump()
-        }
+        return {"stage":"VIA","search_spec":spec.model_dump(),
+                "matches":[m.model_dump() for m in mres.matches],
+                "action_plan":plan.model_dump()}
 
-# =========================
-# DOMA agents inline
-# =========================
-
+# =========================================================
+# DOMA agents
+# =========================================================
 DOMA_SYSTEM = (
     "You answer strictly from retrieved lease text. Cite section or page. "
-    "If the answer is not in the text, say Not found in provided lease and suggest escalation."
+    "If not found, say 'Not found in provided lease' and suggest escalation."
 )
 
 class LeaseAnswer(BaseModel):
@@ -253,15 +224,15 @@ class LeaseAnswer(BaseModel):
     risk_flags: List[str] = []
 
 class LeaseQAAgent:
-    def run(self, question: str, retrieved_chunks: List[Dict[str, Any]]) -> LeaseAnswer:
-        context = "\n\n".join([f"[{c.get('source','doc')} p{c.get('page','?')}] {c.get('text','')}" for c in retrieved_chunks])
-        messages = [
-            {"role": "system", "content": DOMA_SYSTEM},
-            {"role": "user", "content": f"Lease snippets:\n{context}\n\nQuestion: {question}\nProvide a concise answer with inline citations"}
+    def run(self, question: str, chunks: List[Dict[str, Any]]) -> LeaseAnswer:
+        context = "\n\n".join([f"[{c.get('source','lease')} p{c.get('page','?')}] {c.get('text','')}" for c in chunks])
+        msgs = [
+            {"role":"system","content":DOMA_SYSTEM},
+            {"role":"user","content":f"Lease snippets:\n{context}\n\nQuestion: {question}\nAnswer concisely with inline citations."}
         ]
-        resp = client.chat.completions.create(model="gpt-4o-mini", messages=messages)
+        resp = client.chat.completions.create(model="gpt-4o-mini", messages=msgs)
         txt = resp.choices[0].message.content
-        cits = [{"section": "unknown", "page": c.get("page")} for c in retrieved_chunks[:2]]
+        cits = [{"section":"unknown","page": c.get("page")} for c in chunks[:2]]
         return LeaseAnswer(answer=txt, citations=cits)
 
 class TriageResult(BaseModel):
@@ -271,26 +242,21 @@ class TriageResult(BaseModel):
     eta_hours: int
     confirm_message: str
 
-EMERGENCY_KEYWORDS = {"gas leak", "water main break", "sparks", "smoke"}
+EMERGENCY = {"gas leak","water main break","sparks","smoke"}
 
 class ServiceTriageAgent:
-    def run(self, ticket_text: str, photos: Optional[List[str]] = None) -> TriageResult:
-        text_low = ticket_text.lower()
-        if any(k in text_low for k in EMERGENCY_KEYWORDS):
+    def run(self, ticket_text: str) -> TriageResult:
+        t = ticket_text.lower()
+        if any(k in t for k in EMERGENCY):
             return TriageResult(
-                category="emergency",
-                priority="P0",
-                vendor="dispatch_call_center",
-                eta_hours=1,
-                confirm_message="Emergency detected. We are dispatching immediately. Please evacuate if unsafe and call local emergency services."
+                category="emergency", priority="P0", vendor="dispatch_call_center", eta_hours=1,
+                confirm_message="Emergency detected. Dispatching immediately. If unsafe, evacuate and call local emergency services."
             )
-        category = "plumbing" if "leak" in text_low else "hvac" if ("ac" in text_low or "air" in text_low) else "general"
-        vendor = "preferred_plumber_inc" if category == "plumbing" else "preferred_hvac_llc" if category == "hvac" else "handyman_pool"
-        eta = 24 if category == "general" else 8
-        return TriageResult(
-            category=category, priority="P2", vendor=vendor, eta_hours=eta,
-            confirm_message=f"Ticket logged as {category}. Assigned {vendor}. Estimated visit within {eta} hours."
-        )
+        category = "plumbing" if "leak" in t else "hvac" if ("ac" in t or "air" in t) else "general"
+        vendor = "preferred_plumber_inc" if category=="plumbing" else "preferred_hvac_llc" if category=="hvac" else "handyman_pool"
+        eta = 8 if category in ("plumbing","hvac") else 24
+        return TriageResult(category=category, priority="P2", vendor=vendor, eta_hours=eta,
+                            confirm_message=f"Ticket logged as {category}. Assigned {vendor}. ETA within {eta} hours.")
 
 class Offer(BaseModel):
     rent_usd: float
@@ -306,92 +272,217 @@ class RenewalPackage(BaseModel):
 class RenewalDealAgent:
     def run(self, current_rent: float, comps_median: float, policy_floor: float, policy_ceiling: float) -> RenewalPackage:
         target = max(policy_floor, min(comps_median, policy_ceiling))
-        primary = Offer(rent_usd=target, term_months=12, incentives=["touch up paint"])
-        alt1 = Offer(rent_usd=target * 0.98, term_months=24, incentives=["one month free at end"])
-        alt2 = Offer(rent_usd=target * 1.01, term_months=12, incentives=["new appliance package"])
+        primary = Offer(rent_usd=target, term_months=12, incentives=["touch-up paint"])
+        alt1 = Offer(rent_usd=round(target*0.98,2), term_months=24, incentives=["1 month free end of term"])
+        alt2 = Offer(rent_usd=round(target*1.01,2), term_months=12, incentives=["new appliance package"])
         approval = not (policy_floor <= primary.rent_usd <= policy_ceiling)
-        just = f"Priced near market median ${comps_median:.0f}, within policy [{policy_floor:.0f}, {policy_ceiling:.0f}]"
-        return RenewalPackage(primary=primary, alternatives=[alt1, alt2], justification=just, needs_manager_approval=approval)
+        just = f"Anchored to market median ${comps_median:,.0f}, within policy [{policy_floor:,.0f}–{policy_ceiling:,.0f}]."
+        return RenewalPackage(primary=primary, alternatives=[alt1,alt2], justification=just, needs_manager_approval=approval)
 
-# =========================
-# UI logic
-# =========================
+# =========================================================
+# Manager Agent — auto-routing inside VIA/DOMA
+# =========================================================
+class ManagerAgent:
+    """
+    Determines which sub-agent(s) to run based on user intent.
+    The user only chooses VIA or DOMA; Manager handles the rest.
+    """
 
-st.markdown("---")
+    # simple keyword intents; you can replace with an LLM classifier later
+    VIA_INTENTS = {
+        "needs": ["need", "looking", "find", "search", "budget", "sqft", "move", "location"],
+        "tour":  ["tour", "visit", "schedule", "see", "book"],
+    }
+    DOMA_INTENTS = {
+        "lease":   ["lease", "renewal notice", "deposit", "fee", "clause", "term", "sublet"],
+        "triage":  ["leak", "broken", "repair", "hvac", "ac", "heater", "issue", "maintenance", "gas", "smoke", "water"],
+        "renewal": ["renew", "extend", "offer", "increase", "rent proposal", "counter"],
+    }
 
-if st.session_state.mode == "VIA":
-    st.subheader("VIA  new tenant acquisition")
-    user_text = st.text_input("Describe the space you want", placeholder="Example  Midtown office 1000 to 1200 sqft under 4500 per month pet friendly")
-    run_btn = st.button("Run VIA")
-    if run_btn:
-        if st.session_state.uploaded_df is None or st.session_state.uploaded_df.empty:
-            st.warning("Please upload a dataset before running VIA")
+    def via_route(self, text: str) -> str:
+        t = text.lower()
+        if any(k in t for k in self.VIA_INTENTS["tour"]):   return "tour"
+        return "needs"  # default path runs full VIA (needs→match→tour)
+
+    def doma_route(self, text: str) -> str:
+        t = text.lower()
+        if any(k in t for k in self.DOMA_INTENTS["triage"]):  return "triage"
+        if any(k in t for k in self.DOMA_INTENTS["renewal"]): return "renewal"
+        return "lease"
+
+    def handle_via(self, user_text: str, inventory: List[Dict[str,Any]], slots: List[Dict[str,str]], sample_rows: Optional[str]) -> Dict[str,Any]:
+        route = self.via_route(user_text)
+        via = VIAAgent(inventory_rows=inventory, slots=slots)
+        # For VIA, even if user asked directly for a tour, we still need matches to propose slots.
+        return {"route":"VIA/"+route, **via.handle_full(user_text, sample_rows)}
+
+    def handle_doma(self, user_text: str, pasted_lease: str) -> Dict[str,Any]:
+        route = self.doma_route(user_text)
+        if route == "triage":
+            tri = ServiceTriageAgent().run(ticket_text=user_text)
+            return {"route":"DOMA/triage", "triage": tri.model_dump()}
+        elif route == "renewal":
+            pkg = RenewalDealAgent().run(current_rent=3200, comps_median=3300, policy_floor=3000, policy_ceiling=3600)
+            return {"route":"DOMA/renewal", "renewal": pkg.model_dump()}
         else:
-            df = st.session_state.uploaded_df.copy()
-            # normalize amenities column into list when possible
-            if "amenities" in df.columns and df["amenities"].dtype == object:
-                def to_list(v):
-                    if isinstance(v, list):
-                        return v
-                    try:
-                        return json.loads(v)
-                    except Exception:
-                        return [str(v)]
-                df["amenities"] = df["amenities"].apply(to_list)
-            inventory = df.to_dict(orient="records")
-            sample_rows = df.head(3).to_string()
-            via = VIAAgent(inventory_rows=inventory, calendar_slots=DEFAULT_SLOTS)
-            with st.spinner("Extracting needs, ranking matches, and drafting tour plan"):
-                result = via.handle(user_text=user_text, sample_rows=sample_rows)
-            st.success("VIA completed")
-            st.json(result)
+            chunks=[]
+            if pasted_lease.strip():
+                for i, blk in enumerate(pasted_lease.split("\n\n")):
+                    chunks.append({"source":"lease","page":i+1,"text":blk[:1200]})
+            ans = LeaseQAAgent().run(question=user_text, chunks=chunks)
+            return {"route":"DOMA/lease", "lease_answer": ans.model_dump()}
 
-else:
-    st.subheader("DOMA  existing tenant operations")
-    doma_tab = st.tabs(["Lease Q and A", "Service triage", "Renewal offer"])[0]
+manager = ManagerAgent()
 
-    tab1, tab2, tab3 = st.tabs(["Lease Q and A", "Service triage", "Renewal offer"])
+# =========================================================
+# Helpers
+# =========================================================
+def ensure_welcome():
+    if not messages:
+        messages.append({"role":"assistant","content":"Hi! I’m BuildWise AI.\n\nSelect **VIA** or **DOMA** in the sidebar. I’ll route your message to the right agent automatically.\n- VIA: tell me area, budget, size, must-haves.\n- DOMA: ask about your lease, describe a maintenance issue, or request a renewal offer."})
 
-    with tab1:
-        question = st.text_input("Ask about your lease", placeholder="When is my renewal notice due")
-        lease_text = st.text_area("Paste lease excerpts or notes", height=180, placeholder="Paste relevant clauses here")
-        ask_btn = st.button("Answer from lease")
-        if ask_btn:
-            chunks = []
-            if lease_text.strip():
-                # simple fake chunking for demo
-                for i, block in enumerate(lease_text.split("\n\n")):
-                    chunks.append({"source": "lease", "page": i + 1, "text": block[:1200]})
-            agent = LeaseQAAgent()
-            with st.spinner("Answering from provided lease text"):
-                ans = agent.run(question=question, retrieved_chunks=chunks)
-            st.json(ans.model_dump())
+def inventory_records() -> List[Dict[str, Any]]:
+    if inventory_df is None or inventory_df.empty: return []
+    df = inventory_df.copy()
+    if "amenities" in df.columns:
+        def to_list(v):
+            if isinstance(v, list): return v
+            try: return json.loads(v)
+            except: return [str(v)] if pd.notna(v) else []
+        df["amenities"] = df["amenities"].apply(to_list)
+    return df.to_dict(orient="records")
 
-    with tab2:
-        tx = st.text_area("Describe the issue", height=120, placeholder="Example  bathroom leak under sink since last night")
-        triage_btn = st.button("Create service ticket")
-        if triage_btn:
-            triage = ServiceTriageAgent().run(ticket_text=tx)
-            st.json(triage.model_dump())
+def summarize_via(res: Dict[str, Any]) -> str:
+    if not res or "matches" not in res: return "No results."
+    ms = res["matches"]
+    lines = []
+    for m in ms[:3]:
+        rp = m.get("row_preview", {})
+        lines.append(f"• {rp.get('address','')} ({rp.get('neighborhood','')}) — {rp.get('sqft','?')} sqft, ${rp.get('rent','?')}/mo — score {int(m.get('score',0))}")
+    plan = res.get("action_plan",{}).get("confirmation_prompt","")
+    return f"**Top matches**\n" + "\n".join(lines) + ("\n\n" + plan if plan else "")
 
-    with tab3:
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            current_rent = st.number_input("Current rent USD", min_value=0.0, value=3200.0, step=50.0)
-        with col2:
-            comps_median = st.number_input("Comps median USD", min_value=0.0, value=3300.0, step=50.0)
-        with col3:
-            policy_floor = st.number_input("Policy floor USD", min_value=0.0, value=3000.0, step=50.0)
-        with col4:
-            policy_ceiling = st.number_input("Policy ceiling USD", min_value=0.0, value=3600.0, step=50.0)
-        renew_btn = st.button("Propose renewal package")
-        if renew_btn:
-            pkg = RenewalDealAgent().run(current_rent, comps_median, policy_floor, policy_ceiling)
-            st.json(pkg.model_dump())
+def build_email_summary(conv: List[Dict[str,str]], structured: Dict[str,Any]) -> str:
+    lines = ["Subject: BuildWise AI — Conversation Summary",
+             "",
+             "Hello team,",
+             "",
+             "Here is the latest BuildWise AI conversation summary.",
+             ""]
+    for m in conv[-12:]:
+        who = "User" if m["role"]=="user" else "Assistant"
+        lines.append(f"{who}: {m['content']}")
+    lines.append("")
+    if structured.get("VIA"):
+        lines.append("— VIA Result —")
+        lines.append(json.dumps(structured["VIA"], indent=2))
+    if structured.get("DOMA"):
+        lines.append("— DOMA Result —")
+        lines.append(json.dumps(structured["DOMA"], indent=2))
+    lines.append("")
+    lines.append("Best,")
+    lines.append("BuildWise AI")
+    return "\n".join(lines)
 
-# optional chat history viewer
-with st.expander("Session messages"):
-    st.write(st.session_state.chat_history)
+# =========================================================
+# Layout
+# =========================================================
+col_chat, col_right = st.columns([0.58, 0.42])
 
-st.markdown("---")
-st.markdown('<div style="text-align:center;color:#7f8c8d;padding:8px;">BuildWise AI  your AI assistant for real estate</div>', unsafe_allow_html=True)
+with col_chat:
+    ensure_welcome()
+    for msg in messages:
+        cls = "assistant-bubble" if msg["role"] == "assistant" else "user-bubble"
+        st.markdown(f"<div class='chat-bubble {cls}'>{msg['content']}</div>", unsafe_allow_html=True)
+
+    user_input = st.chat_input("Type here… I’ll auto-route inside VIA/DOMA")
+    if user_input:
+        messages.append({"role":"user","content":user_input})
+        try:
+            if mode == "VIA":
+                inv = inventory_records()
+                sample = inventory_df.head(3).to_string() if (inventory_df is not None and not inventory_df.empty) else None
+                with st.spinner("Manager → VIA agents (needs → match → tour)…"):
+                    res = manager.handle_via(user_text=user_input, inventory=inv, slots=DEFAULT_SLOTS, sample_rows=sample)
+                last_structured = {"VIA": res}
+                assistant_text = f"_{res['route']}_\n\n" + summarize_via(res)
+            else:
+                pasted = st.session_state.get("lease_paste","")
+                with st.spinner("Manager → DOMA agents…"):
+                    res = manager.handle_doma(user_text=user_input, pasted_lease=pasted)
+                last_structured = {"DOMA": res}
+                if "lease_answer" in res:
+                    assistant_text = f"_{res['route']}_\n\n**Lease answer**\n\n{res['lease_answer']['answer']}"
+                elif "triage" in res:
+                    assistant_text = f"_{res['route']}_\n\n**Service ticket**\n\n{res['triage']['confirm_message']}"
+                else:
+                    p = res["renewal"]["primary"]
+                    assistant_text = f"_{res['route']}_\n\n**Renewal offer**\n\n${p['rent_usd']:,.0f}/mo · {p['term_months']} mo · {', '.join(p['incentives'])}"
+            messages.append({"role":"assistant","content":assistant_text})
+            st.session_state["messages"] = messages
+            st.session_state["last_structured"] = last_structured
+        except Exception as e:
+            messages.append({"role":"assistant","content":f"⚠️ Error: {e}"})
+            st.session_state["messages"] = messages
+
+with col_right:
+    if mode == "VIA":
+        st.markdown("### 🔎 VIA — New Tenant")
+        st.caption("Manager routes your request to Needs → Match → Tour")
+        if inventory_df is None or inventory_df.empty:
+            st.info("Upload a listings CSV in the sidebar for best VIA results.")
+        if last_structured.get("VIA"):
+            res = last_structured["VIA"]
+            with st.container():
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.markdown("#### Search spec")
+                st.json(res.get("search_spec", {}))
+                st.markdown("<hr class='soft'/>", unsafe_allow_html=True)
+                st.markdown("#### Top matches")
+                st.json(res.get("matches", [])[:3])
+                st.markdown("<hr class='soft'/>", unsafe_allow_html=True)
+                st.markdown("#### Action plan")
+                st.json(res.get("action_plan", {}))
+                st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.markdown("### 🛠️ DOMA — Existing Tenant")
+        st.caption("Lease Q&A · Service Triage · Renewals (auto-routed)")
+        with st.expander("📄 Paste lease clauses (for lease questions)"):
+            st.text_area("Paste relevant text", height=160, key="lease_paste")
+        if last_structured.get("DOMA"):
+            dom = last_structured["DOMA"]
+            if dom.get("lease_answer"):
+                with st.container():
+                    st.markdown("<div class='card'>", unsafe_allow_html=True)
+                    st.markdown("#### Lease Answer")
+                    st.write(dom["lease_answer"].get("answer",""))
+                    st.markdown("**Citations**")
+                    st.json(dom["lease_answer"].get("citations", []))
+                    st.markdown("</div>", unsafe_allow_html=True)
+            if dom.get("triage"):
+                with st.container():
+                    st.markdown("<div class='card'>", unsafe_allow_html=True)
+                    st.markdown("#### Service Ticket")
+                    st.json(dom["triage"])
+                    st.markdown("</div>", unsafe_allow_html=True)
+            if dom.get("renewal"):
+                with st.container():
+                    st.markdown("<div class='card'>", unsafe_allow_html=True)
+                    st.markdown("#### Renewal Package")
+                    st.json(dom["renewal"])
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<hr class='soft'/>", unsafe_allow_html=True)
+    st.markdown("#### ✉️ Share conversation")
+    email_body = build_email_summary(messages, last_structured)
+    st.download_button(
+        label="Download email draft (.txt)",
+        data=email_body.encode("utf-8"),
+        file_name="buildwise_conversation_summary.txt",
+        mime="text/plain"
+    )
+    if email_to.strip():
+        st.caption(f"Ready to send to: **{email_to}** (use your mail client or wire SMTP in code)")
+
+st.markdown("<hr class='soft'/>", unsafe_allow_html=True)
+st.caption("🏢 BuildWise AI — Manager Agent auto-routing inside VIA & DOMA • Upload data in the sidebar")
