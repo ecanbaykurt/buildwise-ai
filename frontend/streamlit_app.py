@@ -475,40 +475,43 @@ with col_chat:
         st.session_state["messages"] = messages
         st.rerun()
 
-    # ------- Prompt Helper: suggestions as clickable chips -------
-    suggest_items = generate_suggestions(messages, mode)
-    if suggest_items:
-        st.caption("Suggestions")
-        chips_cols = st.columns(min(4, len(suggest_items)))
-        clicked = None
-        for i, s in enumerate(suggest_items):
-            with chips_cols[i % len(chips_cols)]:
-                if st.button(s, key=f"sugg_{i}", help="Use this suggestion", args=None):
-                    clicked = s
-        if clicked:
-            st.session_state["pending_suggestion"] = clicked
-            st.experimental_rerun()
+# ------- Prompt Helper: suggestions as clickable chips -------
+suggest_items = generate_suggestions(messages, mode)
+if suggest_items:
+    st.caption("Suggestions")
+    cols = st.columns(min(4, len(suggest_items)))
+    clicked = None
+    for i, s in enumerate(suggest_items):
+        with cols[i % len(cols)]:
+            if st.button(s, key=f"sugg_{i}", help="Use this suggestion"):
+                clicked = s
+    if clicked:
+        # auto-send this suggestion as the next user message
+        st.session_state["pending_suggestion"] = clicked
+        st.rerun()
 
-    # input
-    default_placeholder = "Type here… I’ll auto-route inside VIA/DOMA"
-    prefill = st.session_state.get("pending_suggestion", "")
-    user_input = st.chat_input(default_placeholder, key="chat_in", disabled=False, placeholder=default_placeholder)
-    if prefill and not user_input:
-        # auto-send the suggestion as if typed
-        user_input = prefill
-        st.session_state["pending_suggestion"] = ""
+# ---------- Chat input ----------
+default_placeholder = "Type here… I’ll auto-route inside VIA/DOMA"
 
-    if user_input:
-        with st.chat_message("user", avatar="🧑"):
-            st.markdown(user_input)
-        messages.append({"role": "user", "content": user_input})
+# If a suggestion was clicked, send it immediately (without waiting for typing)
+if st.session_state.get("pending_suggestion"):
+    user_input = st.session_state["pending_suggestion"]
+    st.session_state["pending_suggestion"] = ""
+else:
+    # ✅ Correct usage: only 'placeholder' + 'key'
+    user_input = st.chat_input(placeholder=default_placeholder, key="chat_in")
 
-        assistant_text = run_manager_and_reply(user_input)
-        with st.chat_message("assistant", avatar="🤖"):
-            st.markdown(assistant_text)
+if user_input:
+    with st.chat_message("user", avatar="🧑"):
+        st.markdown(user_input)
+    messages.append({"role": "user", "content": user_input})
 
-        messages.append({"role": "assistant", "content": assistant_text})
-        st.session_state["messages"] = messages
+    assistant_text = run_manager_and_reply(user_input)
+    with st.chat_message("assistant", avatar="🤖"):
+        st.markdown(assistant_text)
+
+    messages.append({"role": "assistant", "content": assistant_text})
+    st.session_state["messages"] = messages
 
 # ---------------- RIGHT: Results / tools ----------------
 with col_right:
