@@ -8,7 +8,7 @@ AgentManager:
 - Combines responses for a complete user answer.
 """
 
-# ✅ Use absolute imports (safe for Streamlit Cloud!)
+# Use absolute imports (safe for Streamlit Cloud!)
 from backend.agents.oka_agent import OKAAgent
 from backend.agents.ada_agent import ADAAgent
 
@@ -28,6 +28,6 @@ class AgentManager:
         handoff_keywords = ["handoff to ada", "ready to finalize", "finalize lease"]
         if any(keyword in oka_result.lower() for keyword in handoff_keywords):
             ada_result = self.ada_agent.handle(user_input)
-            return f"🤝 AgentManager Workflow:\n\nOKA: {oka_result}\n\nADA: {ada_result}"
+            return f"AgentManager Workflow:\n\nOKA: {oka_result}\n\nADA: {ada_result}"
 
-        return f"🤝 AgentManager Workflow:\n\nOKA: {oka_result}"
+        return f"AgentManager Workflow:\n\nOKA: {oka_result}"
