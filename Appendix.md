@@ -359,7 +359,3 @@ flowchart LR
 * **Relaxation policy**: test budget +10%, area expand, sqft relax → success rate
 * **Lease QA**: chunk size vs. accuracy trade-off on citation presence
 * **Latency**: p50/p95 timelines per stage (with 1k, 10k rows)
-
----
-
-drop this at the end of your README or as `APPENDIX.md`. if you want, I can also generate a small synthetic dataset + a reproducible notebook that computes `Spec F1` and `NDCG@3` so your talk/demo includes empirical charts.
