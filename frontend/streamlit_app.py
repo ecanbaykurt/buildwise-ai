@@ -1,12 +1,12 @@
 # frontend/streamlit_app.py
-import os, sys, json, uuid
+import os, sys, json
 from typing import List, Dict, Any, Optional
 import pandas as pd
 import streamlit as st
 from pydantic import BaseModel, Field
 from openai import OpenAI
 
-# allow future local imports if you split files
+# allow local imports later if you split files
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 client = OpenAI()
@@ -24,9 +24,6 @@ st.markdown("""
 <style>
 #MainMenu, header, footer {visibility:hidden;}
 .block-container { padding-top: 1.2rem; padding-bottom: 1.2rem; }
-.chat-bubble { padding: 12px 14px; border-radius: 14px; margin: 6px 0; }
-.user-bubble { background: #eef2ff; border: 1px solid #e0e7ff; }
-.assistant-bubble { background: #f9fafb; border: 1px solid #e5e7eb; }
 .card { border:1px solid #e5e7eb; background:#fff; border-radius:14px; padding:14px; }
 hr.soft { border:none; border-top:1px solid #eee; margin:12px 0; }
 .suggestion-chip { display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #e0e7ff; background:#eef2ff; margin:4px 6px 0 0; cursor:pointer; font-size:13px; }
@@ -39,7 +36,7 @@ def ss_get(key, default):
     return st.session_state[key]
 
 messages: List[Dict[str, str]] = ss_get("messages", [])
-mode: str = ss_get("mode", "VIA")                       # user chooses only VIA or DOMA
+mode: str = ss_get("mode", "VIA")                       # user picks VIA or DOMA
 inventory_df: Optional[pd.DataFrame] = ss_get("inventory_df", None)
 last_structured: Dict[str, Any] = ss_get("last_structured", {})
 email_to: str = ss_get("email_to", "")
@@ -60,7 +57,7 @@ st.markdown("""
 # ---------- Sidebar ----------
 with st.sidebar:
     st.markdown("### 🧭 Workflow")
-    mode = st.radio("Choose pipeline", options=["VIA", "DOMA"], index=0 if mode=="VIA" else 1, help="You pick VIA or DOMA; Manager routes to the right sub-agent.")
+    mode = st.radio("Choose pipeline", options=["VIA", "DOMA"], index=0 if mode=="VIA" else 1)
     st.session_state["mode"] = mode
 
     st.markdown("### 📂 Listings CSV")
@@ -105,6 +102,9 @@ VIA_SYSTEM = (
     "Infer cautiously. Include a confidence 0..1 per field. "
     "If budget is implausibly low for the given area, set spec_status:'underconstrained' and suggest adjustments."
 )
+
+from openai import OpenAI
+client = OpenAI()
 
 class NeedsAgent:
     def run(self, user_text: str, sample_rows: Optional[str]) -> SearchSpec:
@@ -202,8 +202,6 @@ class VIAAgent:
         self.needs = NeedsAgent()
         self.matcher = MatchRankAgent(rows=inventory_rows)
         self.closer = TourCloseAgent(slots)
-        self.inventory_rows = inventory_rows
-        self.slots = slots
 
     def handle_full(self, user_text: str, sample_rows: Optional[str]) -> Dict[str, Any]:
         spec = self.needs.run(user_text, sample_rows)
@@ -334,10 +332,6 @@ manager = ManagerAgent()
 # Prompt Helper — suggestions from chat history
 # =========================================================
 def generate_suggestions(history: List[Dict[str,str]], mode: str) -> List[str]:
-    """
-    Uses last 6 turns to propose 2–4 follow-up prompts.
-    Falls back to heuristics if the API call fails.
-    """
     if not history:
         return ["Find offices in Midtown under $4,500/mo", "What documents do I need to book a tour?"] if mode=="VIA" \
                else ["When is my renewal notice due?", "Log a maintenance ticket for a bathroom leak"]
@@ -350,7 +344,7 @@ def generate_suggestions(history: List[Dict[str,str]], mode: str) -> List[str]:
         snippet = "\n".join([f"{m['role']}: {m['content']}" for m in history[-6:]])
         sys_prompt = (
             "You generate short follow-up prompts (max 12 words each), helpful and concrete, "
-            f"for the '{mode}' workflow in a real-estate assistant. Return JSON list of strings only."
+            f"for the '{mode}' workflow in a real-estate assistant. Return JSON list under key 'suggestions'."
         )
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -359,18 +353,13 @@ def generate_suggestions(history: List[Dict[str,str]], mode: str) -> List[str]:
             response_format={"type":"json_object"}
         )
         data = json.loads(resp.choices[0].message.content)
-        items = data.get("suggestions") or data.get("items") or list(data.values())[0]
+        items = data.get("suggestions") or []
         items = [s.strip() for s in items if isinstance(s, str)][:4]
     except Exception:
-        if mode == "VIA":
-            items = ["Show top 3 options closer to subway",
-                     "Can we tour this Tuesday at 3pm?",
-                     "Relax max_sqft and re-run matches"]
-        else:
-            items = ["What is the late fee policy?",
-                     "Create a service ticket: AC not cooling",
-                     "Propose a 24-month renewal option"]
-
+        items = ["Show top 3 options near subway",
+                 "Book a tour for Tuesday 3pm"] if mode=="VIA" else \
+                ["What is the late fee policy?",
+                 "Create a service ticket: AC not cooling"]
     st.session_state["last_suggestions"] = {"key": key, "items": items}
     return items
 
@@ -424,9 +413,9 @@ def build_email_summary(conv: List[Dict[str,str]], structured: Dict[str,Any]) ->
 # =========================================================
 col_chat, col_right = st.columns([0.58, 0.42])
 
-# ---------------- LEFT: ChatGPT-like transcript ----------------
+# ---------------- LEFT: Chat transcript ----------------
 with col_chat:
-    # header controls
+    # controls
     c1, c2 = st.columns([1, 1])
     with c1:
         if st.button("🧹 Clear chat", use_container_width=True):
@@ -438,13 +427,14 @@ with col_chat:
     with c2:
         regenerate = st.button("🔁 Regenerate", use_container_width=True)
 
-    # render full history
+    # render history
     ensure_welcome()
     for msg in messages:
         with st.chat_message(msg["role"], avatar=("🧑" if msg["role"]=="user" else "🤖")):
             st.markdown(msg["content"])
 
-    # helper to run ManagerAgent and produce assistant_text + structured
+    manager = ManagerAgent()
+
     def run_manager_and_reply(user_text: str):
         if st.session_state["mode"] == "VIA":
             inv = inventory_records()
@@ -452,66 +442,59 @@ with col_chat:
             with st.spinner("Manager → VIA (needs → match → tour)…"):
                 res = manager.handle_via(user_text=user_text, inventory=inv, slots=DEFAULT_SLOTS, sample_rows=sample)
             st.session_state["last_structured"] = {"VIA": res}
-            reply = f"_{res['route']}_\n\n" + summarize_via(res)
+            return f"_{res['route']}_\n\n" + summarize_via(res)
         else:
             pasted = st.session_state.get("lease_paste", "")
             with st.spinner("Manager → DOMA…"):
                 res = manager.handle_doma(user_text=user_text, pasted_lease=pasted)
             st.session_state["last_structured"] = {"DOMA": res}
             if "lease_answer" in res:
-                reply = f"_{res['route']}_\n\n**Lease answer**\n\n{res['lease_answer']['answer']}"
+                return f"_{res['route']}_\n\n**Lease answer**\n\n{res['lease_answer']['answer']}"
             elif "triage" in res:
-                reply = f"_{res['route']}_\n\n**Service ticket**\n\n{res['triage']['confirm_message']}"
+                return f"_{res['route']}_\n\n**Service ticket**\n\n{res['triage']['confirm_message']}"
             else:
                 p = res["renewal"]["primary"]
-                reply = f"_{res['route']}_\n\n**Renewal offer**\n\n${p['rent_usd']:,.0f}/mo · {p['term_months']} mo · {', '.join(p['incentives'])}"
-        return reply
+                return f"_{res['route']}_\n\n**Renewal offer**\n\n${p['rent_usd']:,.0f}/mo · {p['term_months']} mo · {', '.join(p['incentives'])}"
 
     # regenerate last answer
     if regenerate and any(m["role"] == "user" for m in messages):
         last_user = [m for m in messages if m["role"] == "user"][-1]["content"]
-        new_reply = run_manager_and_reply(last_user)
-        messages.append({"role": "assistant", "content": new_reply})
+        messages.append({"role":"assistant","content":run_manager_and_reply(last_user)})
         st.session_state["messages"] = messages
         st.rerun()
 
-# ------- Prompt Helper: suggestions as clickable chips -------
-suggest_items = generate_suggestions(messages, mode)
-if suggest_items:
-    st.caption("Suggestions")
-    cols = st.columns(min(4, len(suggest_items)))
-    clicked = None
-    for i, s in enumerate(suggest_items):
-        with cols[i % len(cols)]:
-            if st.button(s, key=f"sugg_{i}", help="Use this suggestion"):
-                clicked = s
-    if clicked:
-        # auto-send this suggestion as the next user message
-        st.session_state["pending_suggestion"] = clicked
-        st.rerun()
+    # suggestions
+    suggest_items = generate_suggestions(messages, mode)
+    if suggest_items:
+        st.caption("Suggestions")
+        cols = st.columns(min(4, len(suggest_items)))
+        clicked = None
+        for i, s in enumerate(suggest_items):
+            with cols[i % len(cols)]:
+                if st.button(s, key=f"sugg_{i}"):
+                    clicked = s
+        if clicked:
+            st.session_state["pending_suggestion"] = clicked
+            st.rerun()
 
-# ---------- Chat input ----------
-default_placeholder = "Type here… I’ll auto-route inside VIA/DOMA"
+    # chat input — ✅ CORRECT USAGE (no positional arg + placeholder together, no disabled kw)
+    placeholder = "Type here… I’ll auto-route inside VIA/DOMA"
+    if st.session_state.get("pending_suggestion"):
+        user_input = st.session_state["pending_suggestion"]
+        st.session_state["pending_suggestion"] = ""
+    else:
+        user_input = st.chat_input(placeholder=placeholder, key="chat_in")
 
-# If a suggestion was clicked, send it immediately (without waiting for typing)
-if st.session_state.get("pending_suggestion"):
-    user_input = st.session_state["pending_suggestion"]
-    st.session_state["pending_suggestion"] = ""
-else:
-    # ✅ Correct usage: only 'placeholder' + 'key'
-    user_input = st.chat_input(placeholder=default_placeholder, key="chat_in")
+    if user_input:
+        with st.chat_message("user", avatar="🧑"):
+            st.markdown(user_input)
+        messages.append({"role":"user","content":user_input})
 
-if user_input:
-    with st.chat_message("user", avatar="🧑"):
-        st.markdown(user_input)
-    messages.append({"role": "user", "content": user_input})
-
-    assistant_text = run_manager_and_reply(user_input)
-    with st.chat_message("assistant", avatar="🤖"):
-        st.markdown(assistant_text)
-
-    messages.append({"role": "assistant", "content": assistant_text})
-    st.session_state["messages"] = messages
+        reply = run_manager_and_reply(user_input)
+        with st.chat_message("assistant", avatar="🤖"):
+            st.markdown(reply)
+        messages.append({"role":"assistant","content":reply})
+        st.session_state["messages"] = messages
 
 # ---------------- RIGHT: Results / tools ----------------
 with col_right:
