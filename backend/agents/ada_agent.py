@@ -80,8 +80,8 @@ class ADAAgent:
         decision_output = self.decision_agent.run(crm_output)
 
         return (
-            f"📌 ADA Agent Workflow:\n\n"
-            f"📄 LeaseAgent: {lease_output}\n\n"
-            f"🗂️ CRMAgent: {crm_output}\n\n"
-            f"✅ DecisionAgent: {decision_output}"
+            f"ADA Agent Workflow:\n\n"
+            f"LeaseAgent: {lease_output}\n\n"
+            f"CRMAgent: {crm_output}\n\n"
+            f"DecisionAgent: {decision_output}"
         )
